@@ -1,7 +1,9 @@
 # Status & handoff
 
-**As of 2026-09-18.** Phase 1 is **confirmed on real hardware** on the Windows 11
-laptop. Phase 2 is now unblocked except for the axis mapping.
+**As of 2026-09-18.** Phases 1 to 3 are built. The software can play a 360° video
+aimed by head motion, in a window. Two hardware problems stand between that and
+the headset: the DK1 panel has never been detected, and the tracker has since
+**dropped off USB**.
 
 ## Phase table
 
@@ -9,8 +11,8 @@ laptop. Phase 2 is now unblocked except for the axis mapping.
 |---|---|---|
 | 1 | USB HID transport + packet decode | **Hardware-confirmed.** |
 | 2 | Orientation filter (quaternion) | **Built and hardware-confirmed.** |
-| 3 | 360° video renderer | Not started |
-| 4 | Fullscreen + lens distortion on the DK1 display | Not started |
+| 3 | 360° video renderer | **Built.** Verified against a replayed capture; not yet run against the live tracker. |
+| 4 | Fullscreen + lens distortion on the DK1 display | Blocked — the panel is not detected. |
 
 ## What exists
 
@@ -19,11 +21,17 @@ laptop. Phase 2 is now unblocked except for the axis mapping.
 | `dk1/protocol.py` | Report layout, 21-bit unpacking, unit scaling, feature-report builders. Pure functions. |
 | `dk1/device.py` | `Tracker` class: open by VID/PID, keep-alive thread, `reports()` / `samples()` iterators, `replay_raw()` for captures. Also `explain_invisible_device()`. |
 | `dk1/orientation.py` | `OrientationFilter` (Mahony) and `calibrate()`. Pure math, no I/O. |
+| `dk1/renderer.py` | `PanoramaRenderer`: fullscreen-quad equirectangular shader, aimed by a rotation matrix. Takes a caller-supplied GL context. |
+| `dk1/video.py` | Threaded decode (`VideoSource`), the one-slot frame handoff (`LatestFrame`), and `synthetic_panorama()`. OpenCV imported softly. |
 | `tools/dk1_probe.py` | Phase 1 diagnostic CLI. |
 | `tools/dk1_orient.py` | Phase 2 driver: `--live` readout, `--replay` a capture through the filter. |
+| `tools/dk1_player.py` | Phase 3 player: `--live`, `--replay`, or mouse-driven with no hardware. |
+| `tools/make_test_video.py` | Writes an equirectangular test clip, for exercising decode without a real 360° video. |
 | `tools/dk1_display.py` | Phase 4 display probe: enumerates every video output and what is attached. |
 | `tests/test_protocol.py` | Protocol test suite, no hardware required. |
 | `tests/test_orientation.py` | Filter test suite, no hardware required. |
+| `tests/test_video.py` | Frame-handoff and test-pattern suite, no hardware and no OpenCV required. |
+| `tests/test_renderer.py` | Runs the real shader offscreen and asserts on pixels. Skips if the machine has no usable GL. |
 
 ### `dk1_probe.py` commands
 
@@ -195,6 +203,40 @@ perfectly stable — observed live as yaw −124.7° with roll +126.0°, sum ste
 `OrientationFilter.matrix` or `.quaternion`**; the Euler angles are for humans
 reading a diagnostic, and `--live` flags the degenerate region.
 
+## Phase 3 as built
+
+`tools/dk1_player.py` draws an equirectangular frame through the shader in
+`dk1/renderer.py`, aimed by the Phase 2 filter:
+
+```bat
+python tools\dk1_player.py                              :: test pattern, mouse look
+python tools\dk1_player.py --video clip.mp4 --live      :: the real thing
+python tools\dk1_player.py --video clip.mp4 --replay axis_capture.bin
+```
+
+Measured with a 2048×1024 clip replayed against `axis_capture.bin`:
+
+| Measure | Result |
+|---|---|
+| Render rate | **90 fps**, the vsync ceiling of the internal panel |
+| Decode rate | 30 fps, matching the source |
+| Frames dropped | **1**, at startup |
+| View follows the recorded head motion | yes — yaw tracked 0° → +58° in step with `--replay` |
+
+Two bugs in the roadmap's shader sketch were found and are written up in
+[ROADMAP.md](ROADMAP.md#phase-3--360-renderer--done): the horizontal lookup needs
+`atan(d.x, -d.z)`, and the rotation matrix must be transposed on its way into the
+uniform. **Neither is visible in a still frame** — both render a perfectly
+plausible panorama that is simply aimed wrong — which is why
+`tests/test_renderer.py` renders the actual shader into an offscreen buffer and
+asserts on pixels. `moderngl.create_standalone_context()` works on this AMD
+laptop, so that costs nothing and needs no window.
+
+The test pattern exists for the same reason. `synthetic_panorama()` paints the
+cardinal directions and both poles in distinct colours, so the assertions can read
+"turned left shows the left marker" and a vertical flip or a transpose fails
+loudly instead of looking fine.
+
 ## Observed on hardware, for any consumer of the sample stream
 
 **Discard the first report after opening the device.** It arrives carrying the
@@ -208,6 +250,42 @@ The samples themselves are fine; it is the timing that is meaningless.
 device.** Immediately after the Oculus runtime was killed, one report arrived
 and then nothing for 10 s; a second run was flawless at 926 reports/s. Treat an
 initial silence as a reason to retry, not as a failure.
+
+## Open problem: the tracker has dropped off USB
+
+It worked — 4628 reports at 926/s with zero errors — and then, later the same
+session, it stopped enumerating entirely. Windows now reports **both** of its
+device nodes as ghosts:
+
+```
+HID\VID_2833&PID_0001\7&36F0DBC&0&0000     Present: False   Status: Unknown
+USB\VID_2833&PID_0001\61M6I3TGQS37         Present: False   Status: Unknown
+```
+
+The only USB devices actually present are the laptop's internal Bluetooth and
+webcam. The Oculus runtime was stopped at the time, so this is not the sharing
+violation described above — that case leaves the device present and merely
+un-openable, and reports Win32 error 32. **This reports error 2, on a path that no
+longer exists.** The Config Utility said "Oculus Rift Removed" at around the same
+time, which is the same event seen from the other side.
+
+How to tell the three cases apart, since they look similar from `--list`:
+
+| Symptom | Meaning |
+|---|---|
+| Device present, open fails with **error 32** | Another process holds it — almost always `OVRServer_x64.exe`. |
+| Device present, open fails with **error 2** | The node is a ghost; the hardware has gone. |
+| Device absent from PnP entirely | Never connected on this machine. |
+
+`Get-PnpDevice | Where-Object { $_.InstanceId -match 'VID_2833' }` is the quickest
+check — look at `Present`, not at `Status`.
+
+**A tracker that works and then vanishes, on a box whose panel has never been
+detected, points at one shared cause rather than two.** Both are fed by the
+control box's DC adapter, and a marginal supply can light the LED and run the
+low-current USB tracker while failing to bring up the panel and its HDMI
+receiver. Worth checking that the adapter is the DK1's own, or matches its
+spec, before concluding the panel is dead.
 
 ## Open risk: the display — investigated, not yet working
 
@@ -299,16 +377,26 @@ input.
 ### If it does start being detected
 
 The rest of Phase 4 then applies as written in [ROADMAP.md](ROADMAP.md): confirm
-`--modes` offers 1280×800 @ 60 Hz, then pick that monitor in `glfw`. Until then,
-Phase 3 should be built in a desktop window, which the roadmap recommends anyway.
+`--modes` offers 1280×800 @ 60 Hz, then `python tools\dk1_player.py --video
+clip.mp4 --live --fullscreen --monitor N`. The player already takes a monitor
+index and toggles fullscreen, so the only work left in 4a is choosing the right
+index. 4b, the barrel distortion and the stereo pair, is still unwritten.
 
 ## Next milestones
 
-**Check the HDMI display.** It is the only thing left that can invalidate a whole
-phase, and it is entirely independent of the software, so it should happen before
-Phase 3 rather than after.
+**Both remaining milestones are physical.** The software is ahead of the hardware:
+there is a working player and nothing verified to run it on.
 
-Then Phase 3, the renderer — see [ROADMAP.md](ROADMAP.md). The design decisions
-are already made there, it now has a working orientation source to drive it, and
-the roadmap is explicit that it should be built in a desktop window first.
-Debugging a renderer while wearing a headset showing a warped image is miserable.
+1. **Get the tracker back on USB.** Reseat the USB cable and the DC adapter, then
+   `python tools\dk1_probe.py --list`. Until this is back, Phase 3's `--live`
+   path is the one thing in the project that has never been exercised — though
+   `--replay` covers the same code with recorded samples.
+2. **Bisect the video path** with a known-good monitor on that HDMI socket, as
+   described above. Try the control box's DVI-D input too.
+3. Check the DC adapter's rating. It is the one explanation that accounts for
+   both a vanishing tracker and a panel that never comes up.
+
+Phase 4b, the lens distortion, can be written before the display works — the
+warp is a post-process on an offscreen texture and can be developed and inspected
+in a window like everything else. It is the obvious next software task if the
+hardware stays stuck.

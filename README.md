@@ -14,8 +14,8 @@ The code is OS-portable; only display enumeration is platform-specific.
 |---|---|---|
 | 1 | USB HID transport + packet decode | **done, confirmed on hardware** |
 | 2 | Orientation filter (quaternion) | **done, confirmed on hardware** |
-| 3 | 360° video renderer | not started |
-| 4 | Fullscreen output on the DK1 display | not started |
+| 3 | 360° video renderer | **done**, 90 fps against a replayed capture |
+| 4 | Fullscreen output on the DK1 display | blocked — the panel is not detected |
 
 ## Setup (on the Windows 11 laptop)
 
@@ -81,6 +81,34 @@ agrees with measured gravity:
 python tools\dk1_orient.py --replay capture.bin
 ```
 
+## Phase 3: play a 360° video
+
+```bat
+python tools\dk1_player.py --video clip.mp4 --live
+```
+
+The video must be **equirectangular** — a single 2:1 frame covering the whole
+sphere, which is what a 360° camera or a YouTube 360 download gives you. Turn
+the headset and the view turns. `r` recentres, `f` toggles fullscreen, `space`
+pauses, `q` quits.
+
+It runs without the headset too, which is how the renderer gets worked on:
+
+```bat
+python tools\dk1_player.py                      :: test pattern, drag with the mouse
+python tools\dk1_player.py --replay capture.bin :: aimed by a recorded capture
+```
+
+With no `--video`, it draws a built-in test pattern with the cardinal directions
+in distinct colours — green ahead, red right, blue behind, yellow left, white
+above — which is the quickest way to confirm the projection and the tracking
+agree about which way you are facing. For a moving picture without hunting down a
+real 360° video:
+
+```bat
+python tools\make_test_video.py clip.mp4 --seconds 10
+```
+
 ## If something looks wrong
 
 Capture real packets and they can be analyzed anywhere, on any machine:
@@ -99,8 +127,12 @@ dk1/protocol.py     wire format: 21-bit unpacking, report layout, feature report
                     pure functions, no I/O, fully unit-tested
 dk1/device.py       hidapi transport, keep-alive thread, report/sample iterators
 dk1/orientation.py  Mahony filter: samples in, orientation quaternion out
+dk1/renderer.py     equirectangular shader on a fullscreen quad
+dk1/video.py        threaded decode, newest-frame handoff, test pattern
 tools/dk1_probe.py  Phase 1 diagnostic CLI
 tools/dk1_orient.py Phase 2: live orientation, or replay a capture through it
+tools/dk1_player.py Phase 3: the player
+tools/make_test_video.py  writes an equirectangular test clip
 tools/dk1_display.py display probe: every video output, and what is attached
 tests/              run anywhere, no hardware needed
 ```
@@ -110,7 +142,14 @@ Run the tests with:
 ```bash
 python tests/test_protocol.py
 python tests/test_orientation.py
+python tests/test_video.py
+python tests/test_renderer.py
 ```
+
+`test_renderer.py` runs the real shader in an offscreen GL context and checks
+pixels, because the mistakes that matter here — a transposed matrix, a flipped
+vertical axis — still produce a convincing panorama that is merely aimed wrong.
+It skips itself on a machine with no usable OpenGL.
 
 ## Documentation
 
@@ -130,6 +169,10 @@ python tests/test_orientation.py
   on this machine's single external video output, and has never enumerated the
   panel. Diagnose with `python tools\dk1_display.py --list`; details in
   [docs/STATUS.md](docs/STATUS.md#open-risk-the-display--investigated-not-yet-working).
+- **The tracker has since dropped off USB**, having previously worked. Both of its
+  device nodes are now ghosts. A tracker that vanishes and a panel that never
+  appears may share one cause — the control box's power supply. See
+  [docs/STATUS.md](docs/STATUS.md#open-problem-the-tracker-has-dropped-off-usb).
 - **Lens distortion is mandatory, not cosmetic.** The DK1's lenses need a barrel
   pre-warp or the image is unusable. See
   [docs/ROADMAP.md](docs/ROADMAP.md#4b-barrel-distortion--this-is-not-optional).

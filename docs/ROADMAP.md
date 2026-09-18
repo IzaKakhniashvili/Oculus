@@ -74,7 +74,23 @@ subtract it) removes most of the drift for a fraction of the effort.
 
 ---
 
-## Phase 3 — 360° renderer
+## Phase 3 — 360° renderer — **DONE**
+
+Built as `dk1/renderer.py`, `dk1/video.py` and `tools/dk1_player.py`, and
+verified at 90 fps against a replayed hardware capture. The design below was
+followed as written except for two details in the shader sketch, both of which
+were wrong and are corrected in the code:
+
+- **The horizontal lookup must be `atan(d.x, -d.z)`, not `atan(d.x, d.z)`.**
+  With `d.z`, `u = 0.5` does not land straight ahead: the panorama's wrap sits
+  dead centre in the view, putting a seam directly in front of you.
+- **The rotation matrix must be transposed before it becomes a uniform.** The
+  filter reports row-major and GLSL reads `mat3` column-major. Skipping this
+  applies the inverse rotation, which still renders a convincing panorama and
+  only gives itself away as the view turning the wrong way.
+
+Both are invisible in a still frame, which is why the tests render the real
+shader offscreen and assert on pixels rather than trusting inspection.
 
 **Goal:** equirectangular video on screen, camera rotated by the filter.
 
@@ -112,8 +128,8 @@ from the pixel's NDC position and the FOV, rotates it by the orientation matrix,
 then samples the equirectangular texture:
 
 ```glsl
-vec3 d = normalize(rotation * ray);
-vec2 uv = vec2(atan(d.x, d.z) / 6.2831853 + 0.5,
+vec3 d = normalize(rotation * ray);        // rotation uniform is transposed
+vec2 uv = vec2(atan(d.x, -d.z) / 6.2831853 + 0.5,
                acos(clamp(d.y, -1.0, 1.0)) / 3.1415927);
 colour = texture(video, uv);
 ```
@@ -129,6 +145,12 @@ queue; drop frames rather than blocking when the renderer falls behind.
 
 Upload with a persistently-mapped PBO or double-buffered texture if 4K frames
 prove too slow to upload each frame. Don't optimise this before measuring.
+
+Measured, and it does not need optimising: a 2048×1024 clip holds a steady
+90 fps — the vsync ceiling on this panel — while decoding, with one dropped
+frame, at startup. The queue ended up as a **one-slot latest-frame handoff**
+rather than a bounded queue: for playback the right response to falling behind is
+to skip ahead, and a queue of any depth adds latency instead.
 
 OpenCV gives BGR — either swizzle in the shader or convert on upload. Shader is
 cheaper.
@@ -195,10 +217,18 @@ requires over/under stereo source footage.
 1. ~~Confirm Phase 1 on hardware (`--sanity`).~~ Done.
 2. ~~Measure the axis mapping.~~ Done — it is the identity.
 3. **Check the HDMI display works** — still outstanding, and still the thing that
-   can invalidate Phase 4. Do it before building the renderer.
+   can invalidate Phase 4. Investigated in depth; the panel is not detected at
+   all and the remaining causes are physical. See
+   [STATUS.md](STATUS.md#open-risk-the-display--investigated-not-yet-working).
 4. ~~Phase 2 filter, verified against a recorded capture.~~ Done.
-5. Phase 3 renderer in a normal desktop window first, driven by the live filter.
-6. Phase 4 fullscreen, then distortion, then stereo.
+5. ~~Phase 3 renderer in a normal desktop window first.~~ Done, and verified
+   against a replayed capture. **Not yet driven by the live filter** — the
+   tracker dropped off USB before that run, which is now the open hardware
+   question.
+6. Phase 4 fullscreen, then distortion, then stereo. Blocked on step 3.
 
 Steps 5 and 6 are deliberately separated: debugging a renderer while wearing a
 headset with a warped image is miserable. Get it correct on a monitor first.
+Building Phase 3 ahead of step 3 was a deliberate reordering: it is the only
+remaining work the display cannot block, and the player runs mouse-driven with no
+hardware attached at all.

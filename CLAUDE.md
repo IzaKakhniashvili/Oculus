@@ -17,11 +17,26 @@ the renderer wants — so the sensor-to-render remap is the identity.
 **Phase 2 is also built and confirmed on hardware.** `dk1/orientation.py` holds
 pitch and roll to within 1.7° of measured gravity and drifts 0.21 °/s in yaw.
 
-**The blocker is now the display.** Windows does not see the DK1 panel: this
-laptop has one external video output and it reports nothing attached, and the
-monitor history shows the panel has never been enumerated. That is not the EDID
-problem the roadmap expected — the link is not coming up at all. Probe it with
-`python tools\dk1_display.py --list`.
+**Phase 3 is built.** `tools/dk1_player.py` plays an equirectangular video in a
+window at 90 fps, aimed by the filter. Verified against a replayed capture; the
+`--live` path has not yet run, because of the second blocker below.
+
+**The blockers are both hardware, and the software is ahead of them.**
+
+1. **Windows does not see the DK1 panel.** This laptop has one external video
+   output, it reports nothing attached, and the monitor history shows the panel
+   has never been enumerated. That is not the EDID problem the roadmap expected —
+   the link is not coming up at all. Probe with `python tools\dk1_display.py
+   --list`. The Oculus runtime never detected it either; its "HMD connected" is
+   the USB tracker.
+2. **The tracker has dropped off USB**, having previously worked perfectly. Both
+   its HID and USB nodes now report `Present: False`. This is *not* the runtime
+   holding it — that case leaves the device present and returns error 32; this
+   returns error 2 on a path that no longer exists.
+
+A tracker that works and then vanishes, on a control box whose panel has never
+been driven, is more likely one cause than two: both are fed by that box's DC
+adapter. Check its rating before concluding anything is dead.
 
 See [docs/STATUS.md](docs/STATUS.md) for the full handoff, including the measured
 hardware numbers and the startup quirks.
@@ -35,11 +50,17 @@ dk1/device.py        hidapi transport, keep-alive thread, report iterators,
                      offline capture replay, blocked-device diagnosis.
 dk1/orientation.py   Mahony filter and calibrate(). Pure math, no I/O, so it
                      can be driven from a recorded capture anywhere.
+dk1/renderer.py      equirectangular shader on a fullscreen quad. Takes a GL
+                     context from the caller, so it also runs headless.
+dk1/video.py         threaded decode, newest-frame handoff, test pattern.
 tools/dk1_probe.py   Phase 1 CLI (--list --sanity --live --raw --record)
 tools/dk1_orient.py  Phase 2 CLI (--live --replay)
+tools/dk1_player.py  Phase 3 CLI (--video --live --replay --fullscreen)
+tools/make_test_video.py  writes an equirectangular test clip
 tools/dk1_display.py display probe (--list --modes); ctypes QueryDisplayConfig,
                      no new dependency
-tests/               protocol + filter tests; run anywhere, no hardware needed
+tests/               run anywhere, no hardware needed; the renderer tests skip
+                     themselves if the machine has no usable OpenGL
 docs/                status, protocol reference, roadmap
 ```
 
@@ -55,15 +76,18 @@ docs/                status, protocol reference, roadmap
   attached — that is what makes `--replay` of a capture possible anywhere.
 - **The filter uses plain floats, not numpy.** It runs once per 1 kHz sample,
   where per-call array overhead would dwarf the dozen operations it needs.
-- **hidapi is imported softly** in `dk1/device.py` (`hid = None` on ImportError,
-  `_require_hid()` at the call site). This is deliberate: replaying a recorded
-  capture must work on machines without the binding. Don't "fix" it into a
-  hard top-level import.
-- Run the tests after touching `protocol.py` or `orientation.py`:
+- **hidapi is imported softly** in `dk1/device.py`, and **OpenCV is imported
+  softly** in `dk1/video.py` (`= None` on ImportError, required at the call
+  site). This is deliberate: replaying a recorded capture must work on machines
+  without the binding, and the frame-handoff policy must be testable without a
+  video stack. Don't "fix" either into a hard top-level import.
+- Run the matching tests after touching any of these:
 
 ```bat
 python tests\test_protocol.py
 python tests\test_orientation.py
+python tests\test_video.py
+python tests\test_renderer.py
 ```
 
 ## Gotchas already discovered — don't rediscover these
@@ -104,12 +128,32 @@ python tests\test_orientation.py
  read raw samples rather than the firmware's factory calibration. Anything
  that gates on "is this close to 1 g" must use a measured reference —
  `calibrate()` returns one — or it will reject valid samples.
+10. **The rotation matrix must be transposed on its way into the shader.** The
+ filter reports row-major; GLSL reads `mat3` column-major. `column_major()` in
+ `renderer.py` does it. Getting this wrong applies the inverse rotation, which
+ still renders a convincing panorama and only reveals itself as the view
+ turning the wrong way.
+11. **The equirectangular lookup is `atan(d.x, -d.z)`.** With `d.z`, `u = 0.5`
+ does not land straight ahead and the panorama's wrap sits dead centre in the
+ view — a seam directly in front of you. The roadmap's original sketch had
+ this wrong.
+12. **"Device present but won't open" has two different causes**, and the Win32
+ error tells them apart: **32** means another process holds it (the runtime),
+ **2** means the node is a ghost and the hardware is gone. Check
+ `Present`, not `Status`, in `Get-PnpDevice`.
 
 ## Verification style
 
 The protocol decode is validated **against physics, not against itself** — a
 stationary accelerometer must read 1 g, so `--sanity` checks `|accel| ≈ 9.81`.
 Prefer this kind of check to assertions that merely restate the implementation.
+
+The renderer follows the same rule: `tests/test_renderer.py` runs the **real
+shader** in a standalone GL context and asserts on pixels, because every mistake
+that matters here still produces a plausible panorama that is merely aimed wrong.
+`synthetic_panorama()` colours the cardinal directions and both poles so the
+assertions can read "turned left shows the left marker". Re-implementing the
+projection in Python and comparing would have tested nothing.
 
 When something looks wrong on hardware, capture rather than guess:
 

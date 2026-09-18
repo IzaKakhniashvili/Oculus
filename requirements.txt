@@ -4,8 +4,10 @@ hidapi==0.14.0.post4     # imports as `hid`; bundles the DLL in the Windows whee
 # Phase 2 -- orientation filter.
 numpy>=1.24
 
-# Phase 3 -- 360 video renderer. Install when we get there.
-# moderngl>=5.8
-# glfw>=2.6
-# opencv-python>=4.9
-# pyglm>=2.7
+# Phase 3 -- 360 video renderer.
+moderngl>=5.8            # needs an OpenGL 3.3 core context
+glfw>=2.6
+opencv-python>=4.9       # decode only; imported softly, see dk1/video.py
+
+# pyglm was planned here and is not needed: the only matrix the renderer wants
+# is the one the filter already produces.
