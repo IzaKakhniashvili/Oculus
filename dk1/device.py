@@ -6,6 +6,7 @@ thread, and keeps the sensor awake. Decoding lives in :mod:`dk1.protocol`.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from typing import Callable, Iterator, List, Optional
@@ -51,6 +52,102 @@ def enumerate_devices() -> List[dict]:
 def find_oculus_devices() -> List[dict]:
     """Just the Oculus ones."""
     return [d for d in enumerate_devices() if d.get("vendor_id") == p.VENDOR_ID]
+
+
+# -- diagnosing a device hidapi refuses to list ----------------------------
+#
+# hidapi's enumerate() opens every device to read its descriptors, so a device
+# another process holds exclusively is omitted from the list entirely rather
+# than reported as inaccessible. That turns "the Oculus runtime owns the
+# tracker" into a bare "no device found", which sends you hunting for a power
+# fault that isn't there. The helpers below ask the OS directly instead.
+
+_HID_INTERFACE_GUID = "{4d1e55b2-f16f-11cf-88cb-001111000030}"
+ERROR_SHARING_VIOLATION = 32
+
+
+def _registered_hid_paths() -> List[str]:
+    """HID device-interface paths the OS has registered, read from the registry.
+
+    Windows only, and diagnostics only -- never used on the streaming path.
+    """
+    if not sys.platform.startswith("win"):
+        return []
+
+    import winreg
+
+    key_path = rf"SYSTEM\CurrentControlSet\Control\DeviceClasses\{_HID_INTERFACE_GUID}"
+    paths: List[str] = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as key:
+            for i in range(winreg.QueryInfoKey(key)[0]):
+                name = winreg.EnumKey(key, i)
+                # The key name is the path with "\\?\" written as "##?#".
+                if name.startswith("##?#"):
+                    paths.append("\\\\?\\" + name[4:])
+    except OSError:
+        return []
+    return paths
+
+
+def _open_error(path: str) -> Optional[int]:
+    """``None`` if ``path`` can be opened, else the Win32 error code.
+
+    Asks for zero access, so this cannot disturb a device that is working.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.restype = wintypes.HANDLE
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+
+    share_read_write, open_existing = 0x1 | 0x2, 3
+    handle = create_file(path, 0, share_read_write, None, open_existing, 0, None)
+    if handle == wintypes.HANDLE(-1).value:
+        return ctypes.get_last_error()
+    kernel32.CloseHandle(handle)
+    return None
+
+
+def explain_invisible_device(vendor_id: int = p.VENDOR_ID) -> Optional[str]:
+    """Why a device the OS can see is missing from :func:`enumerate_devices`.
+
+    Returns ``None`` when there is nothing to add, so callers can fall back to
+    their usual "check the cable and the power brick" advice.
+    """
+    tag = f"VID_{vendor_id:04X}"
+    for path in _registered_hid_paths():
+        if tag not in path.upper():
+            continue
+        err = _open_error(path)
+        if err is None:
+            continue
+        if err == ERROR_SHARING_VIOLATION:
+            return (
+                f"The OS does see an Oculus device, at\n"
+                f"  {path}\n"
+                "but another process holds it exclusively, so hidapi cannot open it\n"
+                "and leaves it out of the list. Power and cabling are fine.\n\n"
+                "The usual culprit is the legacy Oculus runtime. In an elevated shell:\n"
+                "  sc config OVRService start= demand\n"
+                "  taskkill /F /IM OVRServer_x64.exe /IM OVRServiceLauncher.exe"
+            )
+        return (
+            f"The OS does see an Oculus device, at\n"
+            f"  {path}\n"
+            f"but it cannot be opened (Win32 error {err}). Power and cabling are fine."
+        )
+    return None
 
 
 class Tracker:
@@ -120,6 +217,12 @@ class Tracker:
                 f"but an Oculus device is present ({listed}). "
                 "Pass the matching --pid, or close any other software holding the device."
             )
+        try:
+            blocked = explain_invisible_device(self.vendor_id)
+        except Exception:  # noqa: BLE001
+            blocked = None
+        if blocked:
+            return blocked
         return (
             f"No device with VID 0x{self.vendor_id:04x} found. "
             "Check the USB cable and that the control box has DC power -- "

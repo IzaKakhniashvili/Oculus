@@ -31,7 +31,7 @@ GRAVITY = 9.80665
 
 
 def cmd_list() -> int:
-    from dk1.device import enumerate_devices
+    from dk1.device import enumerate_devices, explain_invisible_device
 
     devices = enumerate_devices()
     if not devices:
@@ -51,6 +51,15 @@ def cmd_list() -> int:
         return 0
 
     print("  No Oculus device found.")
+
+    # Absent and present-but-locked look identical to hidapi, and the advice for
+    # each is completely different, so distinguish them before blaming power.
+    blocked = explain_invisible_device()
+    if blocked:
+        print()
+        print(blocked)
+        return 1
+
     print("\nChecklist:")
     print("  1. Is the DC power adapter plugged into the control box?")
     print("     The DK1 tracker does NOT enumerate on USB bus power alone.")
