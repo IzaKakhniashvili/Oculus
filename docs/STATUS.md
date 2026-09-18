@@ -225,6 +225,19 @@ live off the headset:
 | View follows recorded head motion | yes — yaw tracked 0° → +58° in step with `--replay` |
 | View follows **live** head motion | **yes** — yaw swung +11° → +59° → −41° with the headset in hand, pitch and roll responding, no stutter |
 
+A real 3840×1920 clip (NASA's public-domain Webb cleanroom 360° footage) performs
+the same: **90 fps, zero dropped frames**, live-tracked, through pitch to +81° and
+roll to ±32°. So 4K equirectangular playback needs none of the upload
+optimisations the roadmap held in reserve.
+
+One caveat learned the hard way, since it wasted a round of investigation: **this
+repository sits in a OneDrive folder.** A run immediately after downloading a
+27 MB video into it dipped to 50 fps, which looked convincingly like a
+motion-related problem. It was sync contention. The USB stream measured 943
+reports/s with a worst gap of 2.3 ms under deliberate motion, an identical run
+driven by `--replay` held 90 fps through the same rotation, and the dip never
+reproduced. Treat a one-off dip as suspect until it happens twice.
+
 **Calibration retries rather than failing.** The first live attempt died on
 `NotStationary` because the headset was in someone's hand for the opening second,
 and a player that gives up permanently for that reason is useless. It now waits

@@ -104,10 +104,17 @@ class PanoramaRenderer:
             # sky bleeds into the ground at the poles.
             self.texture.repeat_x = True
             self.texture.repeat_y = False
+            # Plain bilinear, no mipmaps. Mipmapping a 4K panorama was measured
+            # and rejected: rebuilding the chain on every frame cost ~4% of the
+            # frame rate and did not fix the dip that prompted it.
             self.texture.filter = (self.ctx.LINEAR, self.ctx.LINEAR)
             self._size = (width, height)
 
-        self.texture.write(np.ascontiguousarray(frame).tobytes())
+        # Write the array itself, not frame.tobytes(). At 3840x1920 a frame is
+        # 22 MB, and tobytes() copies all of it on the render thread -- while
+        # holding the GIL, so it stalls decoding too. ascontiguousarray is free
+        # when the frame already is contiguous, which OpenCV's are.
+        self.texture.write(np.ascontiguousarray(frame))
 
     def render(self, rotation: Sequence[float], aspect: float) -> None:
         """Draw one frame. ``rotation`` is 9 row-major floats, body to world."""

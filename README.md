@@ -88,9 +88,22 @@ python tools\dk1_player.py --video clip.mp4 --live
 ```
 
 The video must be **equirectangular** — a single 2:1 frame covering the whole
-sphere, which is what a 360° camera or a YouTube 360 download gives you. Turn
-the headset and the view turns. `r` recentres, `f` toggles fullscreen, `space`
-pauses, `q` quits.
+sphere, which is what a 360° camera gives you. Turn the headset and the view
+turns. `r` recentres, `f` toggles fullscreen, `space` pauses, `q` quits.
+
+Prefer H.264 in an `.mp4`. OpenCV's bundled decoders handle VP9 and AV1 in
+`.webm` inconsistently; a window that stays black while the decoded counter rises
+is that, not a renderer bug. A 1:1 frame instead of 2:1 means over/under
+stereoscopic footage, which will look squashed until Phase 4b handles stereo.
+
+For freely-licensed test material, NASA's
+[Scientific Visualization Studio](https://svs.gsfc.nasa.gov/) publishes true 360°
+footage as H.264 at 2:1, public domain. This one is 27 MB and plays at 90 fps:
+
+```bat
+curl -L -o nasa_webb_360.mp4 https://svs.gsfc.nasa.gov/vis/a010000/a013000/a013091/Webb_S7_360_4K_Master.mp4
+python tools\dk1_player.py --video nasa_webb_360.mp4 --live
+```
 
 It runs without the headset too, which is how the renderer gets worked on:
 

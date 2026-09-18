@@ -146,11 +146,30 @@ queue; drop frames rather than blocking when the renderer falls behind.
 Upload with a persistently-mapped PBO or double-buffered texture if 4K frames
 prove too slow to upload each frame. Don't optimise this before measuring.
 
-Measured, and it does not need optimising: a 2048×1024 clip holds a steady
-90 fps — the vsync ceiling on this panel — while decoding, with one dropped
-frame, at startup. The queue ended up as a **one-slot latest-frame handoff**
-rather than a bounded queue: for playback the right response to falling behind is
-to skip ahead, and a queue of any depth adds latency instead.
+Measured, and it does not need optimising. Both a 2048×1024 clip and a 3840×1920
+one hold a steady 90 fps — the vsync ceiling on this panel — while decoding and
+while tracking live head motion, with one dropped frame, at startup. **No PBO, no
+double buffering.** The one upload change worth making was passing the numpy array
+straight to `Texture.write()` instead of `frame.tobytes()`, which was copying 22 MB
+per frame on the render thread while holding the GIL.
+
+The queue ended up as a **one-slot latest-frame handoff** rather than a bounded
+queue: for playback the right response to falling behind is to skip ahead, and a
+queue of any depth adds latency instead.
+
+Two things were tried and rejected, so they don't need retrying:
+
+- **Mipmapping the panorama.** Plausible — a 4K texture is minified roughly 3:1
+  into the window — but rebuilding the chain every frame cost ~4% of the frame
+  rate and fixed nothing. Plain bilinear.
+- **Blaming a frame-rate dip on motion.** A dip to 50 fps during a live run
+  looked like it correlated with head movement. It did not: the USB stream
+  measured 943 reports/s with a worst gap of 2.3 ms and no gap over 20 ms during
+  deliberate motion, an identical run driven by `--replay` held 90 fps through the
+  same rotation, and the dip never reproduced. It was OneDrive uploading a video
+  that had just been downloaded into the project folder. **This repository lives in
+  a synced folder; treat any one-off performance dip as suspect until it
+  reproduces.**
 
 OpenCV gives BGR — either swizzle in the shader or convert on upload. Shader is
 cheaper.
