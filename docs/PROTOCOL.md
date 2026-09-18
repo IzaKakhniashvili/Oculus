@@ -149,18 +149,76 @@ We send `0x30` (motion + command keep-alive) at 1000 Hz.
 
 ## Axis mapping
 
-**Unknown until measured on hardware.** Determine it with `tools/dk1_probe.py
---live`, holding the headset in its normal worn orientation, and fill this in:
+**Measured on hardware, 2026-09-18**, from two recorded captures of the headset
+held in its normal worn orientation:
 
 | Motion | Axis | Sign |
 |---|---|---|
-| Gravity, resting level | ? | ? |
-| Yaw — turn left | ? | ? |
-| Pitch — nod down | ? | ? |
-| Roll — tilt right ear to shoulder | ? | ? |
+| Gravity, resting level | Y | + (a level headset reads +1 g on Y) |
+| Yaw — turn left | Y | + |
+| Pitch — nod down | X | − |
+| Roll — tilt right ear to shoulder | Z | − |
 
-The renderer's frame is **Y up, −Z forward** (OpenGL convention), so this table
-defines the remap from sensor frame to render frame. Phase 2 depends on it.
+So the sensor frame is **X right, Y up, Z backward**, and it is **right-handed**:
+rotations follow the right-hand rule about each axis.
+
+### The remap to the render frame is the identity
+
+The renderer's frame is Y up, −Z forward (OpenGL convention), which is X right,
+Y up, Z backward — **the same frame the sensor already reports in.** No axis
+swap, no sign flip, no permutation matrix. Phase 2 can integrate the gyro and
+use the accelerometer as measured.
+
+This is a convenient result and therefore worth distrusting on sight, so both
+independent derivations are recorded below.
+
+### How it was determined
+
+Two things make this measurable without a rig:
+
+**Gravity identifies the vertical axis.** A stationary accelerometer reads +1 g
+along whichever axis points *up* (it measures the supporting force, not the
+field). Level and worn, the DK1 reads `(+0.05, +0.97, +0.24)` normalised — so +Y
+is up.
+
+**Gravity also identifies the rotation axis, and does it better than the gyro.**
+Integrating the gyro as a vector is only valid while the rotation stays on one
+axis; across a 90° turn it smears across all three. The direction of a fixed
+world vector does not care: if the measured up-direction moves from `g₀` to `g₁`,
+it swung about `g₀ × g₁` exactly, and the body turned the opposite way. On the
+recorded nods this gave a **100% pure** X axis where the gyro integral reported
+only 73%. Prefer it for any future axis work.
+
+The three motions then separate cleanly:
+
+- **Yaw is the one where gravity does not move.** Turning left produced 55° about
+  +Y, 99% pure, with the gravity direction fixed to within 8°. Only rotation
+  about the vertical axis can leave gravity unchanged.
+- **Nodding down moved up from +Y toward +Z**, about −X. Nodding down tips
+  world-up toward the *back* of the head, so **+Z points backward** and −Z is
+  forward.
+- **Tilting the right ear down moved up from +Y toward −X**, about −Z, 96% pure
+  by gyro and 95% by gravity. Up moving toward the body's left is what tilting
+  right does, so this also re-confirms **+X is right**.
+
+Right-handedness follows independently from both the yaw and the pitch: for a
+body rotating at ω, a fixed world vector in body coordinates obeys
+`v̇ = −ω × v`, and ω = −X̂ predicts up moving +Y → +Z, which is what the
+accelerometer recorded.
+
+### Gyro bias
+
+Measured at rest in two separate captures:
+
+```
+(-0.0404, +0.0230, +0.0094) rad/s    |bias| 0.0474  (2.72 deg/s)
+(-0.0335, +0.0193, +0.0088) rad/s    |bias| 0.0397  (2.27 deg/s)
+```
+
+Consistent in direction, but the magnitude moved ~16% between runs a few minutes
+apart — it varies with temperature. **Estimate it at startup from a stationary
+average; do not hard-code these numbers.** Noise about the bias is only
+0.01 rad/s rms, so a one-second average is plenty.
 
 ## Verification approach
 

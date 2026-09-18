@@ -6,21 +6,23 @@ orientation, and renders an equirectangular video on the headset's HDMI display.
 
 ## Read this first
 
-This project was scaffolded on a **Mac**, but the DK1 is plugged into **this
-Windows 11 machine**. That means:
+**Phase 1 is confirmed on hardware** as of 2026-09-18 — `--sanity` passes all
+five checks on the real tracker, so the report layout, the 21-bit unpacking, the
+unit scaling and the keep-alive are all proven, not assumed.
 
-- Everything in Phase 1 is written and unit-tested, but **nothing has ever
-  touched real hardware**. Treat every USB code path as unproven.
-- **The first task in this session is to run the hardware check** and report the
-  result. Do not start Phase 2 before Phase 1 is confirmed:
+The **axis mapping is measured** and written up in `docs/PROTOCOL.md`. The sensor
+frame turns out to be X right, Y up, Z backward and right-handed — the same frame
+the renderer wants — so the sensor-to-render remap is the identity.
 
-```bat
-python tools\dk1_probe.py --list
-python tools\dk1_probe.py --sanity
-```
+**Phase 2 is also built and confirmed on hardware.** `dk1/orientation.py` holds
+pitch and roll to within 1.7° of measured gravity and drifts 0.21 °/s in yaw.
 
-See [docs/STATUS.md](docs/STATUS.md) for the full handoff, including what to do
-if those fail.
+The one untested thing left is the **DK1 display**, which has never been plugged
+in, and it is the only remaining unknown that can invalidate a whole phase. Do
+that before building the Phase 3 renderer.
+
+See [docs/STATUS.md](docs/STATUS.md) for the full handoff, including the measured
+hardware numbers and the startup quirks.
 
 ## Layout
 
@@ -28,9 +30,12 @@ if those fail.
 dk1/protocol.py      wire format: 21-bit unpacking, report layout, feature
                      reports. Pure functions, no I/O, fully unit-tested.
 dk1/device.py        hidapi transport, keep-alive thread, report iterators,
-                     offline capture replay.
-tools/dk1_probe.py   diagnostic CLI (--list --sanity --live --raw --record)
-tests/               protocol tests; run anywhere, no hardware needed
+                     offline capture replay, blocked-device diagnosis.
+dk1/orientation.py   Mahony filter and calibrate(). Pure math, no I/O, so it
+                     can be driven from a recorded capture anywhere.
+tools/dk1_probe.py   Phase 1 CLI (--list --sanity --live --raw --record)
+tools/dk1_orient.py  Phase 2 CLI (--live --replay)
+tests/               protocol + filter tests; run anywhere, no hardware needed
 docs/                status, protocol reference, roadmap
 ```
 
@@ -41,16 +46,20 @@ docs/                status, protocol reference, roadmap
 - **Never add a dependency on the Oculus SDK, LibOVR, or any Oculus runtime.**
   Avoiding them is the entire point of the project — they are unsupported on
   Windows 11.
-- **`dk1/protocol.py` stays pure.** No I/O, no threads, no hidapi. It must remain
-  runnable and testable on a machine with no headset attached.
+- **`dk1/protocol.py` and `dk1/orientation.py` stay pure.** No I/O, no threads,
+  no hidapi. They must remain runnable and testable on a machine with no headset
+  attached — that is what makes `--replay` of a capture possible anywhere.
+- **The filter uses plain floats, not numpy.** It runs once per 1 kHz sample,
+  where per-call array overhead would dwarf the dozen operations it needs.
 - **hidapi is imported softly** in `dk1/device.py` (`hid = None` on ImportError,
   `_require_hid()` at the call site). This is deliberate: replaying a recorded
   capture must work on machines without the binding. Don't "fix" it into a
   hard top-level import.
-- Run the tests after touching `protocol.py`:
+- Run the tests after touching `protocol.py` or `orientation.py`:
 
 ```bat
 python tests\test_protocol.py
+python tests\test_orientation.py
 ```
 
 ## Gotchas already discovered — don't rediscover these
@@ -68,8 +77,29 @@ python tests\test_protocol.py
    `device.py` detects which is installed. Prefer `hidapi` — its Windows wheel
    bundles the DLL.
 5. **Yaw will drift.** Gravity anchors pitch and roll; nothing anchors yaw
-   without magnetometer calibration. Planned fix is a recentre key, not a
-   fight with the magnetometer.
+ without magnetometer calibration. Planned fix is a recentre key, not a
+ fight with the magnetometer. Measured gyro bias at rest is ~0.046 rad/s,
+ about 150° of yaw per minute, so subtract an estimated bias.
+6. **A legacy Oculus runtime on this machine claims the tracker exclusively.**
+ While `OVRServer_x64.exe` runs, opening the HID path fails with Win32 error
+ 32, and since hidapi opens devices merely to enumerate them, the tracker
+ disappears from `--list` rather than appearing as busy. `OVRService` is set
+ to manual start now. `explain_invisible_device()` in `device.py` exists to
+ tell this apart from a genuinely absent device — don't let a future change
+ collapse the two cases back into "check your power brick".
+7. **Ignore the first report after opening.** It carries the firmware's
+ accumulated backlog (`sample_count` up to 87 observed), so its first sample's
+ `dt` can be tens of milliseconds and will jolt the orientation filter.
+ `sample_stream()` in `tools/dk1_orient.py` does this.
+8. **Take orientation as a quaternion or matrix, never Euler angles.** A headset
+ resting on a desk is pitch ≈ −90°, exactly the Euler singularity, where yaw
+ and roll describe the same rotation and both swing wildly while the pose is
+ perfectly stable. `OrientationFilter.euler` exists for humans reading a
+ diagnostic; the renderer gets `.matrix`.
+9. **The resting accelerometer magnitude is ~10.6 m/s², not 9.81**, because we
+ read raw samples rather than the firmware's factory calibration. Anything
+ that gates on "is this close to 1 g" must use a measured reference —
+ `calibrate()` returns one — or it will reject valid samples.
 
 ## Verification style
 

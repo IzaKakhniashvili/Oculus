@@ -1,14 +1,14 @@
 # Status & handoff
 
-**As of 2026-09-18.** Phase 1 written on macOS; hardware is on a Windows 11
-laptop and has not yet been exercised.
+**As of 2026-09-18.** Phase 1 is **confirmed on real hardware** on the Windows 11
+laptop. Phase 2 is now unblocked except for the axis mapping.
 
 ## Phase table
 
 | Phase | Component | State |
 |---|---|---|
-| 1 | USB HID transport + packet decode | **Built. Unit-tested. Not yet hardware-confirmed.** |
-| 2 | Orientation filter (quaternion) | Not started |
+| 1 | USB HID transport + packet decode | **Hardware-confirmed.** |
+| 2 | Orientation filter (quaternion) | **Built and hardware-confirmed.** |
 | 3 | 360° video renderer | Not started |
 | 4 | Fullscreen + lens distortion on the DK1 display | Not started |
 
@@ -17,9 +17,12 @@ laptop and has not yet been exercised.
 | File | Purpose |
 |---|---|
 | `dk1/protocol.py` | Report layout, 21-bit unpacking, unit scaling, feature-report builders. Pure functions. |
-| `dk1/device.py` | `Tracker` class: open by VID/PID, keep-alive thread, `reports()` / `samples()` iterators, `replay_raw()` for captures. |
-| `tools/dk1_probe.py` | Diagnostic CLI. |
+| `dk1/device.py` | `Tracker` class: open by VID/PID, keep-alive thread, `reports()` / `samples()` iterators, `replay_raw()` for captures. Also `explain_invisible_device()`. |
+| `dk1/orientation.py` | `OrientationFilter` (Mahony) and `calibrate()`. Pure math, no I/O. |
+| `tools/dk1_probe.py` | Phase 1 diagnostic CLI. |
+| `tools/dk1_orient.py` | Phase 2 driver: `--live` readout, `--replay` a capture through the filter. |
 | `tests/test_protocol.py` | Protocol test suite, no hardware required. |
+| `tests/test_orientation.py` | Filter test suite, no hardware required. |
 
 ### `dk1_probe.py` commands
 
@@ -33,7 +36,38 @@ laptop and has not yet been exercised.
 
 ## What is actually verified
 
-Verified by running on macOS, with **no hardware**:
+### On hardware, 2026-09-18
+
+`--sanity` passed all five checks against the real tracker:
+
+```
+reports          4628  (926/s)
+samples          4922  (984/s)
+decode errors    0
+dropped samples  0
+temperature      30.29 C
+|accel|          10.5834 m/s^2
+|gyro|           0.04640 rad/s
+|mag|            0.2583 gauss
+```
+
+Gravity coming back at the right order of magnitude confirms the 21-bit
+unpacking *and* the `1e-4` scale on real bytes — the assumed report layout is
+correct. The device enumerates as `VID 0x2833 PID 0x0001`,
+`Oculus VR, Inc. / Tracker DK`, on HID usage page `0x03` usage `0x05`
+(Head Tracker), bound to Microsoft's generic raw-HID driver. No driver install
+and no Oculus SDK were needed.
+
+Two numbers above are worth carrying into Phase 2:
+
+- **`|accel|` is ~8% high** (10.58 vs 9.81). Expected: we ask for raw samples,
+  not the device's factory calibration (`FLAG_USE_CALIBRATION` is not set). It
+  does not affect the gravity *direction*, which is all the filter uses, so it is
+  not a blocker — but do not use accelerometer magnitude as an absolute.
+- **The gyro has a real bias of ~0.046 rad/s (≈2.6 °/s) at rest.** Left
+  uncorrected that is ~150° of yaw drift per minute. Estimate and subtract it.
+
+### Offline, with no hardware attached
 
 - 4,913 pack/unpack round-trips across the full 21-bit signed range, including
   values straddling every byte boundary in the packing.
@@ -49,36 +83,36 @@ Verified by running on macOS, with **no hardware**:
   0.6 rad.
 - `--help` and the missing-hidapi path fail cleanly with no traceback.
 
-**Not verified — everything requiring the headset:**
+**Still not verified:**
 
-- That the device enumerates at VID 0x2833 / PID 0x0001 on this unit.
-- That `send_feature_report` is accepted and the keep-alive actually works.
-- That reports arrive at the expected rate.
-- That the real byte layout matches the assumed one. The decode is derived from
-  the documented DK1 format; only hardware can confirm it.
-- **Sensor axis orientation and signs.** Which physical axis is yaw vs pitch vs
-  roll, and their polarity, is unknown until observed. Phase 2 blocks on this.
+- **The DK1 display.** Never connected, and it is now the only unknown left that
+  can invalidate a whole phase. See "Open risk" below.
 
-## Do this first
+## Environment on the Windows laptop
+
+Already set up — `.venv` on Python 3.11 with `hidapi` and `numpy` installed:
 
 ```bat
-py -3.11 -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
 python tools\dk1_probe.py --list
-```
-
-Expect `VID 0x2833  PID 0x0001`.
-
-> **Nothing found?** Almost always power. The DK1 tracker does not enumerate on
-> USB bus power alone — the control box needs its DC adapter, and the blue LED
-> should be lit. Then try a different USB port.
-
-Then, headset flat on a desk and untouched for 5 seconds:
-
-```bat
 python tools\dk1_probe.py --sanity
 ```
+
+> **The legacy Oculus runtime was installed on this machine and it claims the
+> tracker exclusively.** While `OVRServer_x64.exe` runs, every attempt to open
+> the HID path fails with Win32 error 32 (`ERROR_SHARING_VIOLATION`), and
+> because hidapi opens each device just to enumerate it, the tracker vanishes
+> from `--list` entirely rather than showing up as busy. It has been set to
+> manual start, but if it ever comes back, in an elevated shell:
+>
+> ```bat
+> sc config OVRService start= demand
+> taskkill /F /IM OVRServer_x64.exe /IM OVRServiceLauncher.exe
+> ```
+>
+> `--list` now detects this case and says so instead of blaming the power brick.
+> Genuine absence really is almost always power: the tracker does not enumerate
+> on USB bus power alone, so the control box needs its DC adapter.
 
 ### Interpreting `--sanity`
 
@@ -99,21 +133,80 @@ python tools\dk1_probe.py --record capture.bin --seconds 10
 Move the headset through yaw, pitch and roll while it records. The file is just
 concatenated 62-byte reports and can be decoded on any machine.
 
-## Then: determine the axis mapping
+## Axis mapping — measured, Phase 2 unblocked
 
-Phase 2 cannot be written correctly without this, and it takes two minutes with
-`--live`. Hold the headset in its normal worn orientation and record, for each
-motion, **which axis moves and in which direction**:
-
-| Motion | Axis? | Sign? |
+| Motion | Axis | Sign |
 |---|---|---|
-| Resting level (gravity) | | |
-| Yaw — turn left | | |
-| Pitch — nod down | | |
-| Roll — tilt right ear to shoulder | | |
+| Gravity, resting level | Y | + |
+| Yaw — turn left | Y | + |
+| Pitch — nod down | X | − |
+| Roll — tilt right ear to shoulder | Z | − |
 
-Write the answers into `docs/PROTOCOL.md` under "Axis mapping". They determine
-the remap from sensor frame to the renderer's frame (Y up, −Z forward).
+The sensor frame is X right, Y up, Z backward, right-handed — **identical to the
+renderer's frame**, so the sensor-to-render remap is the identity. Full
+derivation and method in [PROTOCOL.md](PROTOCOL.md#axis-mapping).
+
+Measured from two captures of deliberate head motions, analysed offline. The
+useful trick, worth reusing: derive the rotation axis from how the *gravity
+direction* moved (`g₀ × g₁`) rather than by integrating the gyro, which smears
+across axes over a 90° turn. Gravity gave a 100% pure axis where the gyro
+integral gave 73%.
+
+## Phase 2 as built, and what hardware said about it
+
+`dk1/orientation.py` is the Mahony filter from the roadmap, plus three things the
+hardware forced:
+
+- **`calibrate()` measures gyro bias *and* the resting accelerometer magnitude.**
+  The magnitude matters because this unit reads ~10.6 m/s² at rest, which eats
+  most of the ±2 m/s² window used to decide whether the accelerometer is
+  measuring gravity or movement. Gating against standard gravity would start
+  rejecting valid samples.
+- **The orientation is seeded from the first accelerometer reading** instead of
+  starting level. Converging from level takes ~5 s at `kp=0.5`, and a headset is
+  rarely level when playback starts. Verified on a real capture: pitch now reads
+  its true −7° immediately rather than crawling there over three seconds.
+- **`dt` is clamped to 50 ms** and the occurrences counted, as a backstop for the
+  backlogged first report described below.
+
+Replaying the recorded captures (`tools/dk1_orient.py --replay`):
+
+| Measure | Result |
+|---|---|
+| Yaw reported for the left turn | +57°, against 55° from the independent gravity analysis |
+| Estimated up vs measured gravity, at rest | **1.7° apart** |
+| Yaw drift while stationary | **+0.21 °/s**, down from the 2.67 °/s raw bias |
+| Accelerometer samples rejected as movement | 1.1% across a capture full of fast motion |
+| `dt` clamps after dropping the first report | none |
+
+The check worth keeping is the second one: **while the headset is at rest the
+accelerometer can only be measuring gravity, so the filter's idea of up must
+agree with it** — in any pose, regardless of what the headset was doing earlier.
+That is a real invariant, unlike "did it come back to where it started", which
+only means anything if the headset actually did.
+
+### Use the quaternion, not the Euler angles
+
+Resting flat on a desk is pitch ≈ −90°, exactly the Euler singularity, where yaw
+and roll become the same rotation and both swing freely while the pose is
+perfectly stable — observed live as yaw −124.7° with roll +126.0°, sum steady at
++1.3°. Nothing is wrong when this happens. **Phase 3 should take
+`OrientationFilter.matrix` or `.quaternion`**; the Euler angles are for humans
+reading a diagnostic, and `--live` flags the degenerate region.
+
+## Observed on hardware, for any consumer of the sample stream
+
+**Discard the first report after opening the device.** It arrives carrying the
+firmware's whole accumulated backlog — `sample_count` of 20 and 87 were both
+seen, against a steady-state value of 1. Our `dt` rule then hands the filter a
+single sample covering 85 ms, which would inject a spurious lurch at startup.
+The samples themselves are fine; it is the timing that is meaningless.
+`sample_stream()` in `tools/dk1_orient.py` does this; copy it in Phase 3.
+
+**The stream can be briefly silent right after another process releases the
+device.** Immediately after the Oculus runtime was killed, one report arrived
+and then nothing for 10 s; a second run was flawless at 926 reports/s. Treat an
+initial silence as a reason to retry, not as a failure.
 
 ## Open risk
 
@@ -125,6 +218,11 @@ problem than anything in the software, so find out now.
 
 ## Next milestones
 
-See [ROADMAP.md](ROADMAP.md). Phase 2 is the orientation filter; the design
-decisions are already made there, and it is blocked only on the axis mapping
-above.
+**Check the HDMI display.** It is the only thing left that can invalidate a whole
+phase, and it is entirely independent of the software, so it should happen before
+Phase 3 rather than after.
+
+Then Phase 3, the renderer — see [ROADMAP.md](ROADMAP.md). The design decisions
+are already made there, it now has a working orientation source to drive it, and
+the roadmap is explicit that it should be built in a desktop window first.
+Debugging a renderer while wearing a headset showing a warped image is miserable.

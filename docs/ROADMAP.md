@@ -5,13 +5,16 @@ re-deliberates. Deviate where hardware says otherwise.
 
 ---
 
-## Phase 2 — Orientation filter
+## Phase 2 — Orientation filter — **DONE**
 
-**Goal:** `dk1/orientation.py` turning a stream of `Sample` into a stable
-orientation quaternion.
+Built as `dk1/orientation.py` and confirmed on hardware; see
+[STATUS.md](STATUS.md) for the measured results and the three places the
+implementation deviates from the plan below. The axis mapping it was blocked on
+is measured and written up in [PROTOCOL.md](PROTOCOL.md#axis-mapping) — it turned
+out to be the identity.
 
-**Blocked on:** the axis mapping in [PROTOCOL.md](PROTOCOL.md#axis-mapping).
-Measure it with `--live` first; the filter cannot be correct without it.
+The rest of this section is the original design, kept because it still describes
+what the code does.
 
 ### Approach — Mahony complementary filter
 
@@ -77,6 +80,23 @@ subtract it) removes most of the drift for a fraction of the effort.
 
 **Stack:** `moderngl` + `glfw` for GL context and window, `opencv-python` for
 video decode.
+
+### Taking orientation from Phase 2
+
+```python
+filt = OrientationFilter(calibration=calibrate(stream))
+for sample in stream:          # stream must skip the first report
+    filt.update(sample)
+rotation = filt.matrix         # 9 floats, row-major, ready as a uniform
+```
+
+Use `.matrix` or `.quaternion`, **never `.euler`** — resting flat on a desk is
+pitch ≈ −90°, the Euler singularity, where yaw and roll swing freely while the
+pose is stable. The sensor frame already matches the render frame, so no remap.
+
+The filter wants all 1000 samples/s, but the renderer only needs the pose once
+per frame, so run `update()` wherever the samples are read and let the render
+loop sample `.matrix` whenever it draws. It is a cheap property read.
 
 ### Use a fullscreen quad, not a sphere mesh
 
@@ -172,10 +192,11 @@ requires over/under stereo source footage.
 
 ## Suggested order
 
-1. Confirm Phase 1 on hardware (`--sanity`). **Everything else waits on this.**
-2. Measure the axis mapping.
-3. **Check the HDMI display works** — early, because it can invalidate Phase 4.
-4. Phase 2 filter, verified against a recorded capture.
+1. ~~Confirm Phase 1 on hardware (`--sanity`).~~ Done.
+2. ~~Measure the axis mapping.~~ Done — it is the identity.
+3. **Check the HDMI display works** — still outstanding, and still the thing that
+   can invalidate Phase 4. Do it before building the renderer.
+4. ~~Phase 2 filter, verified against a recorded capture.~~ Done.
 5. Phase 3 renderer in a normal desktop window first, driven by the live filter.
 6. Phase 4 fullscreen, then distortion, then stereo.
 

@@ -12,8 +12,8 @@ The code is OS-portable; only display enumeration is platform-specific.
 
 | Phase | Component | State |
 |---|---|---|
-| 1 | USB HID transport + packet decode | **built, unit-tested, awaiting hardware confirmation** |
-| 2 | Orientation filter (quaternion) | not started |
+| 1 | USB HID transport + packet decode | **done, confirmed on hardware** |
+| 2 | Orientation filter (quaternion) | **done, confirmed on hardware** |
 | 3 | 360° video renderer | not started |
 | 4 | Fullscreen output on the DK1 display | not started |
 
@@ -41,7 +41,9 @@ Expect a device at `VID 0x2833 PID 0x0001`.
 
 > If nothing shows up, the usual cause is power: the DK1 tracker does **not**
 > enumerate on USB bus power alone. The control box needs its DC adapter
-> plugged in, and the blue LED should be lit.
+> plugged in, and the blue LED should be lit. The other cause is a process
+> holding the device exclusively — usually a legacy Oculus runtime — which
+> `--list` detects and reports separately.
 
 **2. Is the packet decode correct?**
 
@@ -62,6 +64,23 @@ python tools\dk1_probe.py --live
 
 Tilt the headset and confirm the accelerometer axes respond sensibly.
 
+## Phase 2: watch the orientation
+
+```bat
+python tools\dk1_orient.py --live
+```
+
+Hold the headset still for a second while the gyro bias is measured, then move
+it. `r` recentres the heading, `q` quits.
+
+To check the filter without the headset, run a recorded capture through it — the
+same code, real samples, and it will tell you whether its idea of "up" still
+agrees with measured gravity:
+
+```bat
+python tools\dk1_orient.py --replay capture.bin
+```
+
 ## If something looks wrong
 
 Capture real packets and they can be analyzed anywhere, on any machine:
@@ -76,17 +95,20 @@ concatenated 62-byte reports; `dk1.device.replay_raw()` re-decodes it offline.
 ## Layout
 
 ```
-dk1/protocol.py    wire format: 21-bit unpacking, report layout, feature reports
-                   pure functions, no I/O, fully unit-tested
-dk1/device.py      hidapi transport, keep-alive thread, report/sample iterators
-tools/dk1_probe.py diagnostic CLI
-tests/             protocol tests -- run anywhere, no hardware needed
+dk1/protocol.py     wire format: 21-bit unpacking, report layout, feature reports
+                    pure functions, no I/O, fully unit-tested
+dk1/device.py       hidapi transport, keep-alive thread, report/sample iterators
+dk1/orientation.py  Mahony filter: samples in, orientation quaternion out
+tools/dk1_probe.py  Phase 1 diagnostic CLI
+tools/dk1_orient.py Phase 2: live orientation, or replay a capture through it
+tests/              run anywhere, no hardware needed
 ```
 
 Run the tests with:
 
 ```bash
 python tests/test_protocol.py
+python tests/test_orientation.py
 ```
 
 ## Documentation
