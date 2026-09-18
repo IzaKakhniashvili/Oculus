@@ -101,6 +101,7 @@ dk1/device.py       hidapi transport, keep-alive thread, report/sample iterators
 dk1/orientation.py  Mahony filter: samples in, orientation quaternion out
 tools/dk1_probe.py  Phase 1 diagnostic CLI
 tools/dk1_orient.py Phase 2: live orientation, or replay a capture through it
+tools/dk1_display.py display probe: every video output, and what is attached
 tests/              run anywhere, no hardware needed
 ```
 
@@ -125,9 +126,10 @@ python tests/test_orientation.py
 - **Yaw will drift.** Phase 2's filter corrects pitch and roll against gravity,
   but yaw has no absolute reference without magnetometer calibration. Expect
   slow rotation; a recentre key is the practical fix.
-- **The DK1 display is the other unknown.** 1280×800 @ 60 Hz over HDMI/DVI.
-  Windows should treat it as an ordinary extended display, but its EDID is
-  unusual and mode selection sometimes needs a nudge. Worth testing early.
+- **The DK1 display is not currently detected at all.** Windows reports no sink
+  on this machine's single external video output, and has never enumerated the
+  panel. Diagnose with `python tools\dk1_display.py --list`; details in
+  [docs/STATUS.md](docs/STATUS.md#open-risk-the-display--investigated-not-yet-working).
 - **Lens distortion is mandatory, not cosmetic.** The DK1's lenses need a barrel
   pre-warp or the image is unusable. See
   [docs/ROADMAP.md](docs/ROADMAP.md#4b-barrel-distortion--this-is-not-optional).

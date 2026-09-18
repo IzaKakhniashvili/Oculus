@@ -17,9 +17,11 @@ the renderer wants — so the sensor-to-render remap is the identity.
 **Phase 2 is also built and confirmed on hardware.** `dk1/orientation.py` holds
 pitch and roll to within 1.7° of measured gravity and drifts 0.21 °/s in yaw.
 
-The one untested thing left is the **DK1 display**, which has never been plugged
-in, and it is the only remaining unknown that can invalidate a whole phase. Do
-that before building the Phase 3 renderer.
+**The blocker is now the display.** Windows does not see the DK1 panel: this
+laptop has one external video output and it reports nothing attached, and the
+monitor history shows the panel has never been enumerated. That is not the EDID
+problem the roadmap expected — the link is not coming up at all. Probe it with
+`python tools\dk1_display.py --list`.
 
 See [docs/STATUS.md](docs/STATUS.md) for the full handoff, including the measured
 hardware numbers and the startup quirks.
@@ -35,6 +37,8 @@ dk1/orientation.py   Mahony filter and calibrate(). Pure math, no I/O, so it
                      can be driven from a recorded capture anywhere.
 tools/dk1_probe.py   Phase 1 CLI (--list --sanity --live --raw --record)
 tools/dk1_orient.py  Phase 2 CLI (--live --replay)
+tools/dk1_display.py display probe (--list --modes); ctypes QueryDisplayConfig,
+                     no new dependency
 tests/               protocol + filter tests; run anywhere, no hardware needed
 docs/                status, protocol reference, roadmap
 ```

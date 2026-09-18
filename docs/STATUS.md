@@ -21,6 +21,7 @@ laptop. Phase 2 is now unblocked except for the axis mapping.
 | `dk1/orientation.py` | `OrientationFilter` (Mahony) and `calibrate()`. Pure math, no I/O. |
 | `tools/dk1_probe.py` | Phase 1 diagnostic CLI. |
 | `tools/dk1_orient.py` | Phase 2 driver: `--live` readout, `--replay` a capture through the filter. |
+| `tools/dk1_display.py` | Phase 4 display probe: enumerates every video output and what is attached. |
 | `tests/test_protocol.py` | Protocol test suite, no hardware required. |
 | `tests/test_orientation.py` | Filter test suite, no hardware required. |
 
@@ -208,13 +209,47 @@ device.** Immediately after the Oculus runtime was killed, one report arrived
 and then nothing for 10 s; a second run was flawless at 926 reports/s. Treat an
 initial silence as a reason to retry, not as a failure.
 
-## Open risk
+## Open risk: the display — investigated, not yet working
 
-**The DK1 display is the largest unknown in the project**, and it is independent
-of all the tracker work. Worth testing early rather than discovering at Phase 4:
-plug the HDMI in and check whether Windows detects a 1280×800 @ 60 Hz display.
-The DK1's EDID is unusual. If Windows won't offer the mode, that is a bigger
-problem than anything in the software, so find out now.
+**Windows does not see the DK1 panel.** Probe it with:
+
+```bat
+python tools\dk1_display.py --list
+python tools\dk1_display.py --modes
+```
+
+What the probe establishes, as of 2026-09-18 with the HDMI reportedly connected:
+
+| Finding | Evidence |
+|---|---|
+| This laptop has exactly **one** external video output | `QueryDisplayConfig` reports 2 targets: 256 (internal panel) and 258. The 6 paths are those 2 targets × 3 desktop sources. |
+| Nothing is attached to it | target 258 reports `targetAvailable = false` |
+| Windows has **never** seen the DK1 | `HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY` holds one entry ever, `SDC4154`, the internal panel. No stale `OVR` entry. |
+| It is not being hidden as an HMD | querying with `QDC_INCLUDE_HMD` returns the same two targets |
+| Nothing is claiming it in Direct Mode | there is no Oculus display driver installed; `C:\Program Files (x86)\Oculus\Drivers` contains only `RiftSensorDriver` |
+
+So this is **not** the EDID problem the roadmap anticipated, and not a mode-list
+problem. The link is not coming up at all — Windows sees no sink on the cable.
+
+Two things worth knowing before chasing it:
+
+- **The one external output is reported as "DisplayPort", which does not mean the
+  laptop lacks an HDMI socket.** Laptop HDMI ports are commonly a DP lane with an
+  on-board converter, and Windows reports the lane, not the socket.
+- **A working tracker does not prove the panel has power.** Both are fed by the
+  control box's DC adapter, but the tracker enumerating only tells you the box is
+  powered, not that the panel is being driven.
+
+The claim that "the Oculus runtime saw the display" is most likely the Config
+Utility reporting the headset over *USB* — it knows a DK1 is 1280×800 from its
+own database and does not need the EDID to say so. Nothing in the Windows display
+history supports the panel ever having been enumerated.
+
+### If it does start being detected
+
+The rest of Phase 4 then applies as written in [ROADMAP.md](ROADMAP.md): confirm
+`--modes` offers 1280×800 @ 60 Hz, then pick that monitor in `glfw`. Until then,
+Phase 3 should be built in a desktop window, which the roadmap recommends anyway.
 
 ## Next milestones
 
