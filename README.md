@@ -14,7 +14,7 @@ The code is OS-portable; only display enumeration is platform-specific.
 |---|---|---|
 | 1 | USB HID transport + packet decode | **done, confirmed on hardware** |
 | 2 | Orientation filter (quaternion) | **done, confirmed on hardware** |
-| 3 | 360° video renderer | **done**, 90 fps against a replayed capture |
+| 3 | 360° video renderer | **done, confirmed on hardware** — live head motion, 90 fps |
 | 4 | Fullscreen output on the DK1 display | blocked — the panel is not detected |
 
 ## Setup (on the Windows 11 laptop)
@@ -169,10 +169,10 @@ It skips itself on a machine with no usable OpenGL.
   on this machine's single external video output, and has never enumerated the
   panel. Diagnose with `python tools\dk1_display.py --list`; details in
   [docs/STATUS.md](docs/STATUS.md#open-risk-the-display--investigated-not-yet-working).
-- **The tracker has since dropped off USB**, having previously worked. Both of its
-  device nodes are now ghosts. A tracker that vanishes and a panel that never
-  appears may share one cause — the control box's power supply. See
-  [docs/STATUS.md](docs/STATUS.md#open-problem-the-tracker-has-dropped-off-usb).
+- **The tracker can drop off USB.** It vanished once mid-session, with both device
+  nodes reporting `Present: False`, and reseating the USB cable and the DC adapter
+  brought it straight back. Reseat before investigating. See
+  [docs/STATUS.md](docs/STATUS.md#resolved-the-tracker-dropped-off-usb-and-came-back).
 - **Lens distortion is mandatory, not cosmetic.** The DK1's lenses need a barrel
   pre-warp or the image is unusable. See
   [docs/ROADMAP.md](docs/ROADMAP.md#4b-barrel-distortion--this-is-not-optional).

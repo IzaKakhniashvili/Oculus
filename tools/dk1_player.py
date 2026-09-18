@@ -62,6 +62,8 @@ class HeadTracking:
     sees either the old orientation or the new one, never half of each.
     """
 
+    CALIBRATION_ATTEMPTS = 60  # roughly a minute of "please hold still"
+
     def __init__(self, source: str, path: str = "", pid: int = 0x0001, kp: float = 0.5) -> None:
         self.source = source  # "live", "replay" or "mouse"
         self.path = path
@@ -124,13 +126,28 @@ class HeadTracking:
 
     def _consume(self, stream) -> None:
         if not self.ready.is_set():
-            self.status = "calibrating - hold still"
-            try:
-                cal = calibrate(stream, seconds=1.0)
-            except NotStationary as exc:
-                self.error = str(exc)
+            # Keep trying. Calibration needs a still second, and a player that
+            # gives up for good because the headset happened to be in someone's
+            # hand as it started is useless -- the next still second will do.
+            # Bounded, because an exhausted replay file also fails every attempt,
+            # instantly, and must not spin.
+            cal = None
+            for attempt in range(1, self.CALIBRATION_ATTEMPTS + 1):
+                if self._stop.is_set():
+                    return
+                self.status = ("calibrating - set the headset down and let go"
+                               if attempt == 1 else
+                               f"still moving - waiting for a still second ({attempt})")
+                try:
+                    cal = calibrate(stream, seconds=1.0)
+                    break
+                except NotStationary as exc:
+                    self.error = str(exc)
+            if cal is None:
                 self.status = "calibration failed"
                 return
+
+            self.error = ""
             self.filter = OrientationFilter(kp=self.kp, calibration=cal)
             self.status = f"tracking (bias {_norm(cal.gyro_bias) * DEG:.2f} deg/s)"
             self.ready.set()

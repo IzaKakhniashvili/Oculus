@@ -17,26 +17,23 @@ the renderer wants — so the sensor-to-render remap is the identity.
 **Phase 2 is also built and confirmed on hardware.** `dk1/orientation.py` holds
 pitch and roll to within 1.7° of measured gravity and drifts 0.21 °/s in yaw.
 
-**Phase 3 is built.** `tools/dk1_player.py` plays an equirectangular video in a
-window at 90 fps, aimed by the filter. Verified against a replayed capture; the
-`--live` path has not yet run, because of the second blocker below.
+**Phase 3 is built and confirmed on hardware.** `tools/dk1_player.py` plays an
+equirectangular video at 90 fps in a window, aimed by real head motion — verified
+live off the headset as well as against recorded captures.
 
-**The blockers are both hardware, and the software is ahead of them.**
+**One blocker is left: Windows does not see the DK1 panel.** This laptop has one
+external video output, it reports nothing attached, and the monitor history shows
+the panel has never been enumerated. That is not the EDID problem the roadmap
+expected — the link is not coming up at all. Probe with `python
+tools\dk1_display.py --list`. The Oculus runtime never detected it either; its
+"HMD connected" refers to the USB tracker. The remaining causes are physical:
+cable, socket, or the DK1's own video path.
 
-1. **Windows does not see the DK1 panel.** This laptop has one external video
-   output, it reports nothing attached, and the monitor history shows the panel
-   has never been enumerated. That is not the EDID problem the roadmap expected —
-   the link is not coming up at all. Probe with `python tools\dk1_display.py
-   --list`. The Oculus runtime never detected it either; its "HMD connected" is
-   the USB tracker.
-2. **The tracker has dropped off USB**, having previously worked perfectly. Both
-   its HID and USB nodes now report `Present: False`. This is *not* the runtime
-   holding it — that case leaves the device present and returns error 32; this
-   returns error 2 on a path that no longer exists.
-
-A tracker that works and then vanishes, on a control box whose panel has never
-been driven, is more likely one cause than two: both are fed by that box's DC
-adapter. Check its rating before concluding anything is dead.
+**The tracker can also drop off USB**, as it did once mid-session — both device
+nodes reporting `Present: False`. Reseating the USB cable and the DC adapter
+brought it straight back, so reseat before investigating. Note this is *not* the
+runtime holding the device: that case leaves it present and returns Win32 error
+32, whereas a ghost node returns error 2.
 
 See [docs/STATUS.md](docs/STATUS.md) for the full handoff, including the measured
 hardware numbers and the startup quirks.

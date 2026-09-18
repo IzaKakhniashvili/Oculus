@@ -1,9 +1,9 @@
 # Status & handoff
 
-**As of 2026-09-18.** Phases 1 to 3 are built. The software can play a 360° video
-aimed by head motion, in a window. Two hardware problems stand between that and
-the headset: the DK1 panel has never been detected, and the tracker has since
-**dropped off USB**.
+**As of 2026-09-18.** Phases 1 to 3 are built and confirmed on hardware: turning
+the real headset turns a 360° video at 90 fps, in a window. The one thing left
+between that and watching it *in* the headset is the DK1 panel, which has never
+been detected — and that is now the only open problem in the project.
 
 ## Phase table
 
@@ -11,7 +11,7 @@ the headset: the DK1 panel has never been detected, and the tracker has since
 |---|---|---|
 | 1 | USB HID transport + packet decode | **Hardware-confirmed.** |
 | 2 | Orientation filter (quaternion) | **Built and hardware-confirmed.** |
-| 3 | 360° video renderer | **Built.** Verified against a replayed capture; not yet run against the live tracker. |
+| 3 | 360° video renderer | **Built and hardware-confirmed.** Live head motion drives 360° video at 90 fps. |
 | 4 | Fullscreen + lens distortion on the DK1 display | Blocked — the panel is not detected. |
 
 ## What exists
@@ -214,14 +214,28 @@ python tools\dk1_player.py --video clip.mp4 --live      :: the real thing
 python tools\dk1_player.py --video clip.mp4 --replay axis_capture.bin
 ```
 
-Measured with a 2048×1024 clip replayed against `axis_capture.bin`:
+Measured with a 2048×1024 clip, both replayed against `axis_capture.bin` and run
+live off the headset:
 
 | Measure | Result |
 |---|---|
 | Render rate | **90 fps**, the vsync ceiling of the internal panel |
 | Decode rate | 30 fps, matching the source |
-| Frames dropped | **1**, at startup |
-| View follows the recorded head motion | yes — yaw tracked 0° → +58° in step with `--replay` |
+| Frames dropped | **1**, at startup, in every run |
+| View follows recorded head motion | yes — yaw tracked 0° → +58° in step with `--replay` |
+| View follows **live** head motion | **yes** — yaw swung +11° → +59° → −41° with the headset in hand, pitch and roll responding, no stutter |
+
+**Calibration retries rather than failing.** The first live attempt died on
+`NotStationary` because the headset was in someone's hand for the opening second,
+and a player that gives up permanently for that reason is useless. It now waits
+for a still second, up to 60 attempts — bounded, because an exhausted replay file
+also fails every attempt, instantly, and must not spin.
+
+Confirmation that the Euler warning in this document is real, seen live: with the
+headset flat on the desk the readout sat at pitch −89.3°, yaw −118.9°, roll
++119.5° for thirty seconds while the headset did not move at all. Yaw and roll sum
+to a steady +0.6°. Nothing is wrong; the renderer takes `.matrix` and is
+unaffected.
 
 Two bugs in the roadmap's shader sketch were found and are written up in
 [ROADMAP.md](ROADMAP.md#phase-3--360-renderer--done): the horizontal lookup needs
@@ -251,11 +265,13 @@ device.** Immediately after the Oculus runtime was killed, one report arrived
 and then nothing for 10 s; a second run was flawless at 926 reports/s. Treat an
 initial silence as a reason to retry, not as a failure.
 
-## Open problem: the tracker has dropped off USB
+## Resolved: the tracker dropped off USB, and came back
 
-It worked — 4628 reports at 926/s with zero errors — and then, later the same
-session, it stopped enumerating entirely. Windows now reports **both** of its
-device nodes as ghosts:
+Worth keeping, because it will happen again and it looks alarming.
+
+Mid-session the tracker stopped enumerating entirely, having previously delivered
+4628 reports at 926/s with zero errors. Windows reported **both** of its device
+nodes as ghosts:
 
 ```
 HID\VID_2833&PID_0001\7&36F0DBC&0&0000     Present: False   Status: Unknown
@@ -280,12 +296,15 @@ How to tell the three cases apart, since they look similar from `--list`:
 `Get-PnpDevice | Where-Object { $_.InstanceId -match 'VID_2833' }` is the quickest
 check — look at `Present`, not at `Status`.
 
-**A tracker that works and then vanishes, on a box whose panel has never been
-detected, points at one shared cause rather than two.** Both are fed by the
-control box's DC adapter, and a marginal supply can light the LED and run the
-low-current USB tracker while failing to bring up the panel and its HDMI
-receiver. Worth checking that the adapter is the DK1's own, or matches its
-spec, before concluding the panel is dead.
+**Reseating the USB cable and the DC adapter brought it straight back**, Status OK
+on both nodes, and it has streamed perfectly since. So the fault is a connection
+that works loose, not a dead tracker. If it disappears again, reseat before
+investigating anything.
+
+That it recovers so easily also weakens the theory that the DC adapter is starving
+the panel: the same box now runs the tracker indefinitely without trouble. The
+display and the USB dropout look like two separate problems after all, and only
+the display is still open.
 
 ## Open risk: the display — investigated, not yet working
 
@@ -384,19 +403,21 @@ index. 4b, the barrel distortion and the stereo pair, is still unwritten.
 
 ## Next milestones
 
-**Both remaining milestones are physical.** The software is ahead of the hardware:
-there is a working player and nothing verified to run it on.
+**One hardware problem is left, and it is the display.** Everything else works:
+the tracker streams, the filter holds, and the player draws 360° video aimed by
+real head motion at 90 fps.
 
-1. **Get the tracker back on USB.** Reseat the USB cable and the DC adapter, then
-   `python tools\dk1_probe.py --list`. Until this is back, Phase 3's `--live`
-   path is the one thing in the project that has never been exercised — though
-   `--replay` covers the same code with recorded samples.
-2. **Bisect the video path** with a known-good monitor on that HDMI socket, as
-   described above. Try the control box's DVI-D input too.
-3. Check the DC adapter's rating. It is the one explanation that accounts for
-   both a vanishing tracker and a panel that never comes up.
+1. **Bisect the video path.** Plug an ordinary monitor or TV into that same HDMI
+   socket with the same cable and run `dk1_display.py --watch`. If it appears, the
+   port and cable are fine and the fault is in the DK1's video path; if not, the
+   headset is irrelevant. Try the control box's **DVI-D input** too — a separate
+   signal path inside the box from its HDMI input.
 
-Phase 4b, the lens distortion, can be written before the display works — the
-warp is a post-process on an offscreen texture and can be developed and inspected
-in a window like everything else. It is the obvious next software task if the
-hardware stays stuck.
+2. **Phase 4b, the lens distortion**, which does not need the display. The barrel
+   warp and the stereo pair are a post-process on an offscreen texture and can be
+   developed and inspected in a window like everything else, so this is the
+   obvious software task while the display is stuck. Constants are in
+   [ROADMAP.md](ROADMAP.md#4b-barrel-distortion--this-is-not-optional).
+
+Phase 4a is nearly nothing once the panel is detected: the player already takes
+`--monitor N` and `--fullscreen`, so only picking the right index remains.
