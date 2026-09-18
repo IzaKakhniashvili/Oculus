@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tracker captures from dk1_probe.py --record.
+# Raw binary, regenerable, and can get large. Force-add a specific one with
+#   git add -f capture.bin
+# if a capture ever needs to be shared for debugging.
+*.bin
+
+# 360 video source material -- these are gigabytes. Never commit them.
+*.mp4
+*.mkv
+*.mov
+*.webm
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
