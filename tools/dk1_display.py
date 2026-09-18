@@ -315,6 +315,82 @@ def cmd_list() -> int:
     return 1
 
 
+def output_signature():
+    """What is attached to each video output, for change detection."""
+    sig = {}
+    for path in query_paths(QDC_ALL_PATHS):
+        target = path.targetInfo.id
+        if target in sig and sig[target][1]:
+            continue  # keep the entry that reports a display attached
+        info = target_name(path)
+        sig[target] = (
+            OUTPUT_TECHNOLOGY.get(path.targetInfo.outputTechnology,
+                                  f"0x{path.targetInfo.outputTechnology:08x}"),
+            bool(path.targetInfo.targetAvailable),
+            decode_edid_vendor(info.edidManufactureId),
+            info.monitorFriendlyDeviceName or "",
+        )
+    return sig
+
+
+def cmd_watch(seconds: float) -> int:
+    """Poll the connectors and report the moment anything changes.
+
+    Turns "is it the cable, the adapter, the power or the panel" into a feedback
+    loop: reseat one thing at a time and watch. A connector that never changes
+    state is not receiving a hotplug signal at all.
+    """
+    import time
+
+    print(f"Watching video outputs for {seconds:g}s. Reseat one thing at a time:")
+    print("  the HDMI at the laptop end, then at the control box end, then the")
+    print("  headset's own cable into the box, then the box's DC power.\n")
+
+    previous = output_signature()
+    for target, (tech, available, vendor, name) in sorted(previous.items()):
+        state = f"attached ({vendor} {name})" if available else "nothing attached"
+        print(f"  target {target}  {tech:<22} {state}")
+    print("\nwatching...\n")
+
+    start = time.time()
+    changes = 0
+    while time.time() - start < seconds:
+        time.sleep(0.5)
+        try:
+            current = output_signature()
+        except OSError:
+            continue
+        if current == previous:
+            continue
+        changes += 1
+        stamp = time.time() - start
+        for target in sorted(set(previous) | set(current)):
+            was, now = previous.get(target), current.get(target)
+            if was == now:
+                continue
+            if now is None:
+                print(f"  {stamp:6.1f}s  target {target} disappeared")
+            elif was is None:
+                print(f"  {stamp:6.1f}s  target {target} appeared: {now}")
+            else:
+                print(f"  {stamp:6.1f}s  target {target} {now[0]}: "
+                      f"attached {was[1]} -> {now[1]}"
+                      + (f", EDID {now[2]} {now[3]}" if now[1] else ""))
+        previous = current
+
+    print()
+    if changes == 0:
+        print("No connector changed state for the whole window.")
+        print("Windows never saw a hotplug event, so nothing reached the GPU's")
+        print("connector -- which points at the cable or the panel rather than at")
+        print("anything configurable. If reseating the HDMI at the laptop end did")
+        print("not even register, try a different HDMI cable on a known-good")
+        print("monitor first, to prove the cable and the port work at all.")
+        return 1
+    print(f"{changes} change(s) seen -- so the connector does react. Re-run --list.")
+    return 0
+
+
 def cmd_modes() -> int:
     """Resolutions each attached display offers, and whether 1280x800@60 is there."""
     adapter = 0
@@ -360,11 +436,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="DK1 display probe")
     ap.add_argument("--list", action="store_true", help="every video connector and what is on it")
     ap.add_argument("--modes", action="store_true", help="modes each attached display offers")
+    ap.add_argument("--watch", action="store_true",
+                    help="report the moment a connector changes state, while you reseat cables")
+    ap.add_argument("--seconds", type=float, default=45.0, help="how long --watch runs")
     args = ap.parse_args()
 
     try:
         if args.list:
             return cmd_list()
+        if args.watch:
+            return cmd_watch(args.seconds)
         if args.modes:
             return cmd_modes()
         ap.print_help()

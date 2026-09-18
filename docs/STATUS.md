@@ -273,8 +273,28 @@ Two other things the investigation turned up:
   simply unstable with this device.
 
 **Conclusion: the panel has never been driven on this machine, by us or by the
-runtime.** Windows sees no sink on the cable, which makes this physical — power,
-cable, or port — and not something software can reach.
+runtime.** Windows sees no sink on the cable, which makes this physical — cable
+or panel — and not something software can reach.
+
+### What has been ruled out on the machine side
+
+Reported state: the control box LED is lit, the video cable is in the laptop's
+own HDMI socket, and the tracker on the same control box works over USB.
+
+| Ruled out | How |
+|---|---|
+| A second GPU owning the HDMI port | The machine is an ASUS Vivobook M3401QA with integrated Radeon only. No discrete GPU exists, present or hidden, so the one external output *is* the HDMI socket — reported as a DisplayPort lane, which is normal for laptop HDMI. |
+| The GPU having seen the panel before | No cached EDID under `HKLM\SYSTEM\CurrentControlSet\Control\Video\{...}` for any connector. |
+| Windows needing a nudge to extend | `DisplaySwitch.exe /extend` changed nothing; the output still reports nothing attached. |
+| A hotplug event arriving but being ignored | `dk1_display.py --watch` polled for 50 s and saw no connector change state at all. |
+
+The next step is not software. **Bisect the cable path with a known-good
+display**: plug an ordinary monitor or TV into that same HDMI socket with the
+same cable and run `--watch`. If it appears, the port and cable are fine and the
+fault is in the DK1's video path; if it does not, the fault is the cable or the
+socket, and the headset is irrelevant. Worth trying the control box's **DVI-D
+input** too, since that is a separate signal path inside the box from its HDMI
+input.
 
 ### If it does start being detected
 
