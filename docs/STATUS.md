@@ -240,10 +240,41 @@ Two things worth knowing before chasing it:
   control box's DC adapter, but the tracker enumerating only tells you the box is
   powered, not that the panel is being driven.
 
-The claim that "the Oculus runtime saw the display" is most likely the Config
-Utility reporting the headset over *USB* — it knows a DK1 is 1280×800 from its
-own database and does not need the EDID to say so. Nothing in the Windows display
-history supports the panel ever having been enumerated.
+### The Oculus runtime never saw the display either — tested
+
+Worth settling, because "the runtime detected it" is a reasonable thing to
+conclude from what the runtime prints. The service was restarted and the display
+re-probed with it running: **no change** — same two outputs, target 258 still
+reporting nothing attached, no new monitor, no new registry entry.
+
+Its own logs in `%LOCALAPPDATA%\Oculus\ServerLog_*.txt` say why:
+
+```
+[TrackingManager] HMD connected
+[HMD] WARNING: Unable to change dynamic prediction mode setting
+[HMD] WARNING: Unable to change low persistence mode setting
+```
+
+`TrackingManager` is the **USB tracker**. Across every server log there is not a
+single mention of EDID, display detection, direct mode, extended mode, or 1280 —
+the runtime detected the headset over USB and said "HMD connected" on that basis
+alone. The two warnings are DK2-era features a DK1 does not have.
+
+Two other things the investigation turned up:
+
+- **The installed runtime is SDK 0.8.0.0**, from the PDB path inside
+  `DirectDisplayConfig.exe`. DK1 support ended at 0.5.0.1 and Extended Mode was
+  removed after 0.6, so this runtime cannot drive a DK1 display even in
+  principle.
+- **`DirectDisplayConfig.exe` is NVIDIA-only.** Its own strings are
+  `"DirectDisplay compatible NVidia runtime and/or GPU detected"` / `"not
+  detected. Skipping..."`. This laptop is AMD, so it has nothing to toggle.
+- The logs are full of `{ERR-027} Deadlock detected`, so the runtime is also
+  simply unstable with this device.
+
+**Conclusion: the panel has never been driven on this machine, by us or by the
+runtime.** Windows sees no sink on the cable, which makes this physical — power,
+cable, or port — and not something software can reach.
 
 ### If it does start being detected
 
