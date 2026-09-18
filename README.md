@@ -178,10 +178,16 @@ It skips itself on a machine with no usable OpenGL.
 - **Yaw will drift.** Phase 2's filter corrects pitch and roll against gravity,
   but yaw has no absolute reference without magnetometer calibration. Expect
   slow rotation; a recentre key is the practical fix.
-- **The DK1 display is not currently detected at all.** Windows reports no sink
-  on this machine's single external video output, and has never enumerated the
-  panel. Diagnose with `python tools\dk1_display.py --list`; details in
-  [docs/STATUS.md](docs/STATUS.md#open-risk-the-display--investigated-not-yet-working).
+- **The DK1 display is not detected at all, and no software can change that.** To
+  the PC the DK1 is an ordinary external monitor, and a monitor comes up in a
+  fixed order: hotplug detect, then EDID, then a display device. Windows reports
+  no sink on this machine's only external output and has never enumerated the
+  panel, so the chain breaks at the first step — the hotplug signal is not
+  reaching the GPU. An EDID override cannot help, because an override attaches to
+  a detected monitor and there is no detection to attach it to. The remaining
+  causes are the cable, the socket, or the DK1's own video path. Diagnose with
+  `python tools\dk1_display.py --list`; full reasoning in
+  [docs/STATUS.md](docs/STATUS.md#open-problem-the-display-and-why-it-cannot-be-turned-on-in-software).
 - **The tracker can drop off USB.** It vanished once mid-session, with both device
   nodes reporting `Present: False`, and reseating the USB cable and the DC adapter
   brought it straight back. Reseat before investigating. See

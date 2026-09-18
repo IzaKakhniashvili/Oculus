@@ -319,14 +319,63 @@ the panel: the same box now runs the tracker indefinitely without trouble. The
 display and the USB dropout look like two separate problems after all, and only
 the display is still open.
 
-## Open risk: the display — investigated, not yet working
+## Open problem: the display, and why it cannot be turned on in software
 
-**Windows does not see the DK1 panel.** Probe it with:
+**Windows does not see the DK1 panel at all.** Probe it with:
 
 ```bat
 python tools\dk1_display.py --list
 python tools\dk1_display.py --modes
 ```
+
+### The mechanism, so the conclusion is not just an assertion
+
+To the PC, the DK1 is an **ordinary external monitor**. It is not a VR device with
+a driver: the control box contains an HDMI receiver wired to a 1280×800 LCD, and it
+presents itself exactly as a small desktop display would. There is no Oculus
+software in the path and, on a DK1, there never was — Direct Mode arrived with the
+DK2.
+
+Bringing any monitor up happens in a fixed order, and each step depends on the one
+before it:
+
+1. **Hotplug Detect.** The sink pulls a dedicated pin on the connector high. This
+   is how the GPU learns anything is plugged in at all. It is an electrical
+   signal, not a negotiation.
+2. **EDID.** Only once HPD is asserted does the driver read the monitor's EDID
+   over the DDC/I²C lines to learn its supported timings.
+3. **A display device, then a mode.** Windows creates a monitor device from that
+   EDID, adds a video *target* with a sink attached, and only then can anything be
+   rendered to it.
+
+**Our probe shows the chain breaking at step 1.** The single external output
+reports `targetAvailable = false` — no sink detected — and
+`HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY` has only ever contained the internal
+panel, so no EDID was ever read and no monitor device was ever created, at any
+point in this machine's history.
+
+That is why this cannot be fixed in software, and specifically why the two usual
+tricks do not apply:
+
+- **A registry EDID override** (`EDID_OVERRIDE`) fixes a monitor that reports a
+  *bad* EDID. It has to be attached to an existing monitor device instance, which
+  only exists after steps 1 and 2 succeed. Here there is nothing to attach it to —
+  nothing is being misread, because nothing is being read.
+- **Forcing a mode** requires a display path with a sink on it. There is no sink.
+  Some NVIDIA drivers can force output on a connector regardless; this laptop is
+  AMD-only and its driver exposes no equivalent, and `DisplaySwitch.exe /extend`
+  correspondingly changed nothing.
+
+So the fault is upstream of every layer software can reach: **the hotplug signal is
+not arriving at the GPU.** Everything below is the evidence for that, and the
+remaining causes are all physical.
+
+**One variable is still untested, and it is the cheapest one.** Nothing else has
+ever been plugged into that HDMI socket during this investigation, so "the socket
+works" is an assumption, not a finding. A known-good monitor on that port splits
+the problem in half in a single test — see the next step below.
+
+### Ruling out a software cause
 
 What the probe establishes, as of 2026-09-18 with the HDMI reportedly connected:
 
@@ -398,13 +447,26 @@ own HDMI socket, and the tracker on the same control box works over USB.
 | Windows needing a nudge to extend | `DisplaySwitch.exe /extend` changed nothing; the output still reports nothing attached. |
 | A hotplug event arriving but being ignored | `dk1_display.py --watch` polled for 50 s and saw no connector change state at all. |
 
-The next step is not software. **Bisect the cable path with a known-good
-display**: plug an ordinary monitor or TV into that same HDMI socket with the
-same cable and run `--watch`. If it appears, the port and cable are fine and the
-fault is in the DK1's video path; if it does not, the fault is the cable or the
-socket, and the headset is irrelevant. Worth trying the control box's **DVI-D
-input** too, since that is a separate signal path inside the box from its HDMI
-input.
+### The remaining causes, all physical
+
+Since the hotplug signal is not reaching the GPU, something between the panel and
+the socket is not carrying it. In rough order of likelihood:
+
+| Cause | Why it is plausible | How to test it |
+|---|---|---|
+| **The cable** | The most common DK1 failure by a wide margin, and the failure is often invisible: a cable can carry power and picture conductors fine while the HPD or DDC lines are broken, or be damaged only at a strain point. | Try a different HDMI cable. |
+| **The laptop's HDMI socket** | Never verified. Nothing else has been plugged into it during this investigation, so its working is an assumption. | Plug in any monitor or TV. |
+| **The control box's HDMI input** | DK1 boxes commonly lose one input while keeping the other, since HDMI and DVI-D are separate signal paths inside the box. | Use the DVI-D input with an HDMI-to-DVI-D cable. |
+| **The box's video receiver or the ribbon to the panel** | A lit LED and a working tracker prove only that the box has *power*. The USB tracker and the video receiver are independent circuits; the tracker working says nothing about the receiver being alive. | Try the DK1 on another computer. If no machine detects it on either input with a known-good cable, the box or panel is dead. |
+
+**Do the socket test first.** Plugging an ordinary monitor or TV into that same
+HDMI socket with that same cable, with `dk1_display.py --watch` running, splits the
+problem in half for one minute's work:
+
+- **It appears** → the socket and cable are both fine, and the fault is inside the
+  DK1's video path. Move on to the DVI-D input.
+- **It does not appear** → the fault is the cable or the socket, and the headset is
+  irrelevant to the problem. Swap the cable and repeat.
 
 ### If it does start being detected
 

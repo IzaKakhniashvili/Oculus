@@ -21,13 +21,19 @@ pitch and roll to within 1.7° of measured gravity and drifts 0.21 °/s in yaw.
 equirectangular video at 90 fps in a window, aimed by real head motion — verified
 live off the headset as well as against recorded captures.
 
-**One blocker is left: Windows does not see the DK1 panel.** This laptop has one
-external video output, it reports nothing attached, and the monitor history shows
-the panel has never been enumerated. That is not the EDID problem the roadmap
-expected — the link is not coming up at all. Probe with `python
-tools\dk1_display.py --list`. The Oculus runtime never detected it either; its
-"HMD connected" refers to the USB tracker. The remaining causes are physical:
-cable, socket, or the DK1's own video path.
+**One blocker is left: Windows does not see the DK1 panel, and no software can
+change that.** To the PC the DK1 is an ordinary external monitor — there is no
+driver in the path, and Direct Mode arrived with the DK2. A monitor comes up in a
+fixed order: hotplug detect, then EDID over DDC, then a display device and a mode.
+This laptop's one external output reports `targetAvailable = false` and the monitor
+history has only ever held the internal panel, so **the chain breaks at the first
+step** — the hotplug signal is not reaching the GPU, nothing was ever misread, and
+an EDID override has no detected monitor to attach to. Probe with `python
+tools\dk1_display.py --list`. The Oculus runtime never detected it either; its "HMD
+connected" refers to the USB tracker. The remaining causes are all physical: the
+cable, the socket, or the DK1's own video path. **Don't spend another session
+looking for a software fix** — the cheapest untested variable is the socket, so
+plug any ordinary monitor into it first.
 
 **The tracker can also drop off USB**, as it did once mid-session — both device
 nodes reporting `Present: False`. Reseating the USB cable and the DC adapter

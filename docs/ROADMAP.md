@@ -180,15 +180,21 @@ cheaper.
 
 Two separate problems, both unproven.
 
-### 4a. Getting a fullscreen window onto the DK1
+### 4a. Getting a fullscreen window onto the DK1 — blocked, and not on EDID
 
-**Test this early** — it is the biggest unknown in the project and completely
-independent of the tracker work. Plug the HDMI in and check that Windows offers
-1280×800 @ 60 Hz. The DK1's EDID is unusual.
+**This section anticipated the wrong problem.** It assumed the panel would be
+detected and that its unusual EDID might not offer 1280×800 @ 60 Hz. What actually
+happens is that Windows never detects the panel at all: the hotplug signal does not
+reach the GPU, so no EDID is ever read and no display device is ever created. There
+is no mode list to inspect and nothing for an EDID override to attach to. The full
+reasoning and the remaining physical causes are in
+[STATUS.md](STATUS.md#open-problem-the-display-and-why-it-cannot-be-turned-on-in-software).
 
-`glfw.get_monitors()` enumerates displays; pick the one whose video mode is
-1280×800 and create the window fullscreen on it. Fall back to a named
-`--monitor` index flag, because auto-detection will eventually pick wrong.
+The code side of 4a is nevertheless done. `tools/dk1_player.py` already takes
+`--fullscreen` and `--monitor N` and toggles fullscreen on `f`, so once a display
+appears the only remaining work is picking the right index — auto-detecting the
+1280×800 monitor is a convenience, and the manual flag exists because
+auto-detection would eventually pick wrong anyway.
 
 ### 4b. Barrel distortion — this is not optional
 
@@ -238,7 +244,7 @@ requires over/under stereo source footage.
 3. **Check the HDMI display works** — still outstanding, and still the thing that
    can invalidate Phase 4. Investigated in depth; the panel is not detected at
    all and the remaining causes are physical. See
-   [STATUS.md](STATUS.md#open-risk-the-display--investigated-not-yet-working).
+   [STATUS.md](STATUS.md#open-problem-the-display-and-why-it-cannot-be-turned-on-in-software).
 4. ~~Phase 2 filter, verified against a recorded capture.~~ Done.
 5. ~~Phase 3 renderer in a normal desktop window first.~~ Done, and verified
    against a replayed capture. **Not yet driven by the live filter** — the
