@@ -1,15 +1,16 @@
 # Status & handoff
 
-**As of 2026-09-22.** Phases 1 to 3 are built and confirmed on hardware: turning
-the real headset turns a 360° video at 90 fps, in a window. The one thing left
-between that and watching it *in* the headset is a **deadlock**: the DK1 panel
-lights only while a legacy Oculus runtime is running, and that runtime holds the
-tracker exclusively. That is now the only open problem in the project.
+**As of 2026-09-22 evening.** Phases 1 to 3 are confirmed on hardware. The Oculus
+runtime has been **uninstalled**, the DK1 panel enumerates as an ordinary monitor
+(`EDID vendor OVR`, `Rift DK`, 1280×800 @ 60 Hz) **with the tracker still ours**,
+and Phase 4b — stereo split plus barrel warp — has been run live off the headset.
+The remaining gap is Phase 4a: Windows is **mirroring** the laptop onto the DK1
+instead of giving it its own 1280×800 surface.
 
-> **Correction, 2026-09-22.** Everything this document previously said about the
-> panel being undetectable and the fault being physical was measured with no
-> runtime running, and is wrong. The display works. See
-> [the display section](#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
+> Earlier versions of this document said the panel was undetectable, then that it
+> only lit under the runtime. Both were measured in the wrong state. Uninstalling
+> the runtime released the display. See
+> [the display section](#resolved-the-oculus-software-was-hiding-the-panel--uninstalling-it-released-the-display).
 
 ## Phase table
 
@@ -18,7 +19,8 @@ tracker exclusively. That is now the only open problem in the project.
 | 1 | USB HID transport + packet decode | **Hardware-confirmed.** |
 | 2 | Orientation filter (quaternion) | **Built and hardware-confirmed.** |
 | 3 | 360° video renderer | **Built and hardware-confirmed.** Live head motion drives 360° video at 90 fps. |
-| 4 | Fullscreen + lens distortion on the DK1 display | Blocked — the panel and the tracker are mutually exclusive. |
+| 4a | Fullscreen on the DK1 as its own monitor | Panel enumerates; desktop is still **mirrored**, not extended. |
+| 4b | Stereo split + barrel pre-warp | **Built and live-confirmed.** Same monocular video in both eyes, DK1 lens offset, LibOVR K. |
 
 ## What exists
 
@@ -27,11 +29,13 @@ tracker exclusively. That is now the only open problem in the project.
 | `dk1/protocol.py` | Report layout, 21-bit unpacking, unit scaling, feature-report builders. Pure functions. |
 | `dk1/device.py` | `Tracker` class: open by VID/PID, keep-alive thread, `reports()` / `samples()` iterators, `replay_raw()` for captures. Also `explain_invisible_device()`. |
 | `dk1/orientation.py` | `OrientationFilter` (Mahony) and `calibrate()`. Pure math, no I/O. |
-| `dk1/renderer.py` | `PanoramaRenderer`: fullscreen-quad equirectangular shader, aimed by a rotation matrix. Takes a caller-supplied GL context. |
+| `dk1/renderer.py` | `PanoramaRenderer`: fullscreen-quad equirectangular shader. `render()` is the Phase 3 mono path; `render_stereo()` draws both eyes. |
+| `dk1/optics.py` | DK1 screen and lens numbers (LibOVR defaults). Pure math, no I/O. |
 | `dk1/video.py` | Threaded decode (`VideoSource`), the one-slot frame handoff (`LatestFrame`), and `synthetic_panorama()`. OpenCV imported softly. |
 | `tools/dk1_probe.py` | Phase 1 diagnostic CLI. |
 | `tools/dk1_orient.py` | Phase 2 driver: `--live` readout, `--replay` a capture through the filter. |
-| `tools/dk1_player.py` | Phase 3 player: `--live`, `--replay`, or mouse-driven with no hardware. |
+| `tools/dk1_player.py` | Player: `--live`, `--replay`, `--stereo`, `--no-distortion`. `s` toggles stereo, `d` the warp. |
+| `tests/test_optics.py` | Lens-offset and viewport-split suite. No hardware, no GL. |
 | `tools/make_test_video.py` | Writes an equirectangular test clip, for exercising decode without a real 360° video. |
 | `tools/dk1_display.py` | Phase 4 display probe: enumerates every video output and what is attached. |
 | `tests/test_protocol.py` | Protocol test suite, no hardware required. |
@@ -271,6 +275,41 @@ cardinal directions and both poles in distinct colours, so the assertions can re
 "turned left shows the left marker" and a vertical flip or a transpose fails
 loudly instead of looking fine.
 
+## Phase 4b as built — stereo split and barrel warp
+
+The same monocular panorama is drawn twice, once per eye. That is what the
+roadmap specified for 360° video: true stereo needs over/under source footage,
+which we do not have.
+
+```bat
+python tools\dk1_player.py --video nasa_webb_360.mp4 --live --stereo
+```
+
+`s` toggles the split, `d` toggles the warp. `--no-distortion` starts with the
+split only, for judging it on a monitor.
+
+| What | How |
+|---|---|
+| Viewports | left `(0,0,w/2,h)`, right `(w/2,0,w-w/2,h)` — 640×800 on a 1280×800 window |
+| Lens centre | LibOVR `XCenterOffset` ≈ **0.151976**. Left eye `+offset`, right `-offset`, so the optical axis goes through the lens, not the middle of each half |
+| FOV | physical: `tan(half H) = (H_SCREEN/4)/EYE_TO_SCREEN`, same for V |
+| Warp | `r' = r · (1 + 0.22 r² + 0.24 r⁴)` about the lens centre, in the same fragment shader as the equirect lookup. Not a post-process on an offscreen texture — for 360° video there is no scene to render first |
+
+The numbers live in `dk1/optics.py` (pure, tested) and the draw path in
+`PanoramaRenderer.render_stereo()`. Mono `render()` is unchanged: centred lens,
+identity K. A test asserts that path still matches the original Phase 3 pixels.
+
+**Live, 2026-09-22.** NASA Webb 3840×1920, `--live --stereo`, tracker free after
+the uninstall. One session ran **17,079 frames** (~4 min) and quit cleanly. Yaw
+swung through a full circle with pitch and roll following. Frame rate sat around
+60–75 fps with the DK1 attached and mirroring (vs 90 fps on the laptop alone) —
+same cost already noted under the mirror finding, not a stereo regression.
+
+A YouTube-style circular black mask around each eye was tried the same evening
+and **reverted**. It punched holes in the half-rectangles; on this headset the
+filled halves were better. Do not put it back without a new reason. Chromatic
+aberration is still unwritten.
+
 ## Observed on hardware, for any consumer of the sample stream
 
 **Discard the first report after opening the device.** It arrives carrying the
@@ -323,16 +362,62 @@ investigating anything.
 
 That it recovers so easily also weakens the theory that the DC adapter is starving
 the panel: the same box now runs the tracker indefinitely without trouble. The
-display and the USB dropout look like two separate problems after all, and only
-the display is still open.
+display and the USB dropout look like two separate problems after all. The
+display is no longer hidden; the dropout still happens and still reseats.
 
-## Open problem: the display needs the runtime, and the runtime takes the tracker
+## Resolved: the Oculus software was hiding the panel — uninstalling it released the display
 
-**Corrected 2026-09-22.** This section previously concluded that the panel had
-never been detected, that the hotplug signal was not reaching the GPU, and that
-the remaining causes were all physical — cable, socket, or the DK1's own video
-path. **That conclusion was wrong.** Every probe behind it was taken with no
-Oculus runtime running, and it did not survive the first test in the other state.
+**Solved 2026-09-22.** The Oculus runtime was uninstalled, and the DK1 panel
+immediately enumerated as an ordinary monitor **with the tracker still ours**:
+
+```
+[ACTIVE] target 50331905  DVI       display attached: yes
+                 EDID vendor OVR  product 0x0001   Rift DK
+                 driving 60.00 Hz
+```
+
+`1280 x 800 @ 60 Hz` is in its mode list, `dk1_probe.py --list` sees the tracker at
+the same moment, and `tools/dk1_player.py --video ... --live` played 360° video
+tracked by real head motion with the panel attached. **The deadlock is gone and the
+display is no longer a blocker.**
+
+The working theory below was right: the Oculus software had the DK1's EDID on a
+hide-this-display list honoured by the GPU driver, so the panel was excluded before
+Windows ever listed it. That is why no probe in any *runtime* state could see it,
+and why stopping the service never brought it back — the exclusion outlived the
+service and only went away with the software itself.
+
+**Two earlier conclusions in this project were wrong, and both are worth
+remembering as a pattern.** First, that the fault was physical — cable, socket, or
+the DK1's own video path — drawn entirely from probes taken in one state. Second,
+that the runtime was *required* to light the panel, which inverted cause and
+effect: the runtime was the thing suppressing it. In both cases the measurements
+were sound and the inference reached past them.
+
+### What remains: the panel is mirrored, not extended
+
+The one piece not yet working. The DK1 currently duplicates the laptop screen
+rather than having its own surface:
+
+- `[System.Windows.Forms.Screen]::AllScreens` reports a single desktop screen.
+- `glfw.get_monitors()` returns two monitors **both** reporting 2880×1800 at
+  position (0,0) — the signature of mirroring, not two distinct surfaces.
+- `DisplaySwitch.exe /extend` ran without error and changed nothing.
+
+So the headset shows a scaled copy of the laptop display instead of its native
+1280×800. `--fullscreen --monitor N` cannot target a distinct surface while that
+is true. **Stereo and the warp do not need that surface** — they were built and
+run in a 1280×800 window the same evening. Phase 4a's remaining work is getting
+Windows to *extend* onto the DK1 so that window can go fullscreen on the panel
+at 1280×800 @ 60 Hz.
+
+Also measured, so it is not mistaken for a regression: with the DK1 attached and
+mirroring, the player runs at **45–60 fps with 9 dropped frames**, against a flat
+90 fps when no second display was attached. Expected — the GPU is driving a 60 Hz
+output alongside the 90 Hz internal panel and scaling 2880×1800 down to 1280×800,
+and the two refresh rates no longer divide evenly. Tracking itself was unaffected.
+
+### How it was found — kept because the reasoning is the lesson
 
 ### What actually happens
 
@@ -368,9 +453,9 @@ display, and a demo scene rendered on the headset** (reported 2026-09-21).
 > deadlock breaks outright — we get the display *and* the tracker, which is the
 > whole game.
 
-| | Runtime running | Runtime killed |
-|---|---|---|
-| DK1 panel | detected, renders | not detected |
+| | Runtime running | Runtime killed | **Runtime uninstalled** |
+|---|---|---|---|
+| DK1 panel | detected, renders | not detected | **enumerates as a monitor, 1280×800 @ 60 Hz** |
 | Tracker | locked — open fails with Win32 error 32 | ours, ~926 reports/s |
 
 Two consequences.
@@ -380,8 +465,10 @@ control box's HDMI input, its video receiver, the ribbon and the panel all work 
 a picture appeared on them. The hardware bisection this document used to
 recommend is moot, and no cable, adapter or splitter needs buying.
 
-**What is left is a deadlock.** `tools/dk1_player.py` needs the panel *and* the
-tracker, and each state offers exactly one.
+**That deadlock is closed.** After uninstall, the table's third column is the
+machine's current state: panel enumerates, tracker is ours. The paragraphs below
+this heading describe the *pre-uninstall* investigation and are kept as the
+record of how we got here, not as open work.
 
 ### What that rules in and out
 
@@ -435,8 +522,9 @@ sees with the runtime stopped. It was simply never the whole story.
 | No cached EDID for any connector | nothing under `HKLM\SYSTEM\CurrentControlSet\Control\Video\{...}` |
 | `DisplaySwitch.exe /extend` changes nothing | the output still reports nothing attached |
 
-**None of this has been re-run with the runtime up, and all of it should be.**
-That is task 2 below.
+These rows are the **runtime-off / pre-uninstall** baseline. After uninstall the
+panel *does* enumerate (see the resolved section above). Do not re-run this list
+expecting it to still be true.
 
 ### A third output appeared and vanished, 2026-09-22 — possibly the DK1's connector
 
@@ -453,13 +541,10 @@ The 20:40 run used the pre-fix probe; the 20:59 run used the corrected one and i
 extra output was in the plain `QDC_ALL_PATHS` answer both times, present in one and
 absent in the other.
 
-**A connector that comes and goes on its own is worth chasing**, and target 257 is
-the best candidate so far for the DK1's own. It also sits awkwardly with the
-vendor-hide theory above: an EDID permanently excluded by the AMD driver should
-never produce a *target* at all. Either the exclusion is not permanent, or 257 is
-something else entirely — a dock, or a connector the driver enumerates
-speculatively. **If it reappears, capture `--list` and `--modes` immediately**,
-before it goes again.
+**It came back after uninstall as the DK1 itself.** `--list` then reported
+`target 50331905  DVI`, `EDID vendor OVR`, `Rift DK`, driving 60 Hz. Target 257
+was the same connector appearing and dropping while the hide-list was still
+installed. No longer a mystery.
 
 A same-state probe was also run at 21:12 with `OVRService` Running and the tracker
 present, and it returned the plain two-output baseline with an empty
@@ -468,108 +553,42 @@ whether the panel was lit** — the demo was seen rendering in exactly that kind
 probe-negative state. Recorded only so it is not mistaken later for evidence that
 the service had stopped working.
 
-### State the machine was left in, 2026-09-22
+### State the machine was left in, 2026-09-22 evening
 
-Before a restart: **`OVRService` Running and set to `Automatic`**, so it claims the
-tracker on every boot and `--live` will fail with Win32 error 32 until it is
-stopped. To hand the tracker back, in an elevated shell:
+- **`OVRService` is gone** — not registered. No Oculus processes. Leftover files
+  may still sit under `C:\Program Files (x86)\Oculus`.
+- **Panel enumerates:** `EDID vendor OVR`, `Rift DK`, 1280×800 @ 60 Hz, reported
+  as DVI target 50331905. Desktop is still mirrored, not extended.
+- **Tracker is ours** when the cable is seated. It dropped off USB once during
+  this session (ghost nodes, error 2); reseating USB and the DC adapter brought
+  it back.
+- Do not reinstall the runtime to "fix" the display — that is what hid it.
 
-```bat
-sc config OVRService start= demand
-taskkill /F /IM OVRServer_x64.exe /IM OVRServiceLauncher.exe
-```
+### What to do next
 
-Do this only when the tracker is what you need. Stopping the service is one half of
-the deadlock, and while the uninstall test above is still pending, the runtime is
-the only thing known to have put a picture on the panel.
-
-### What to measure next, in order
-
-**1. Record the runtime version.** Config Utility → About, or the installer
-filename. Nothing else here is reproducible without it.
-
-**2. Probe the display in the working state.** Attempted 2026-09-22 with the
-service running and the panel still dark — see above; the service alone is not the
-working state, so establishing what *is* comes first:
+**1. Extend the desktop onto the DK1.** `DisplaySwitch.exe /extend` already failed
+once. Try Settings → Display, identify the `Rift DK`, set it to Extend, and force
+1280×800 @ 60 Hz. Then:
 
 ```bat
 python tools\dk1_display.py --list
-python tools\dk1_display.py --modes
-reg query "HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY"
+python tools\dk1_player.py --video nasa_webb_360.mp4 --live --stereo --fullscreen --monitor N
 ```
 
-What matters is whether a **second** entry appears under `Enum\DISPLAY` carrying a
-real EDID — 1280×800, an Oculus vendor ID. If it does, the panel genuinely
-enumerates over the cable once the runtime acts, which means hotplug is being
-asserted and the runtime is switching the DK1's video side on. If the display
-appears with no corresponding monitor enumeration, it is coming from the driver
-side and the answer is a different one.
+`glfw.get_monitors()` must show a second size, not two copies of 2880×1800 at
+(0,0). That is the remaining 4a work.
 
-**3. Catch the transition.** Start the watcher first, then start the runtime:
+**2. Chromatic aberration**, if the warp looks right through the lenses but the
+edges fringing. Sample R/G/B at the LibOVR radii. Not started.
 
-```bat
-python tools\dk1_display.py --watch --seconds 60
-```
-
-**4. Capture the USB traffic — this is the one that ends the problem.** Install
-USBPcap, capture the root hub the DK1 is on, start the runtime, stop the capture,
-then filter Wireshark to the DK1's address and read the SET_REPORT / feature-out
-traffic. Any report ID that is not 2 or 8 is the lead. Implementing it is then a
-few lines in `dk1/protocol.py` and one call in `dk1/device.py`, and we light the
-panel ourselves with no runtime running at all.
-
-Same discipline that pinned down the 21-bit packing: capture rather than guess.
-
-**5. If the runtime turns out to be unavoidable, test Raw Input.**
-`RegisterRawInputDevices` on HID usage page `0x03` usage `0x05` (Head Tracker —
-what the DK1 registers as) is fed by the HID class driver rather than by an
-exclusive file handle, so it may keep delivering reports while the runtime owns
-the device. **Unverified**, and cheap to settle with a script that registers for
-the usage page and prints whether anything arrives.
-
-It fits the architecture without disturbing it: `dk1/protocol.py` is pure
-bytes-in, samples-out, so a Raw Input transport slots in beside hidapi in
-`device.py` while the decode, the filter and the renderer stay untouched.
-
-### An intermediate step available right now
-
-With the runtime running, run the player in **mouse-look mode** — which needs no
-tracker — fullscreen on the panel:
-
-```bat
-python tools\dk1_player.py --video clip.mp4 --fullscreen --monitor N
-```
-
-That proves we can render to the headset, separately from proving we can track
-while doing it, and it exercises the `--monitor` index choice that is all Phase 4a
-has left.
-
-### If the panel becomes usable while the tracker is still ours
-
-The rest of Phase 4 applies as written in [ROADMAP.md](ROADMAP.md): confirm
-`--modes` offers 1280×800 @ 60 Hz, then run the player with `--live --fullscreen
---monitor N`. 4b, the barrel distortion and the stereo pair, is still unwritten —
-and it never needed the display.
+USB capture and Raw Input were the leads when we still thought the runtime had to
+stay installed. They are not the next step anymore.
 
 ## Next milestones
 
-**One problem is left and it is the deadlock above.** Everything else works: the
-tracker streams, the filter holds, and the player draws 360° video aimed by real
-head motion at 90 fps.
+**The deadlock is closed. Stereo is in.** What is left is getting a dedicated
+1280×800 surface on the panel.
 
-1. **Record the installed runtime version**, then re-run the display probes with
-   it running. A minute's work, and nothing else is reproducible without it.
-2. **Capture the runtime's USB traffic** and find the feature report that turns the
-   panel on. This ends the problem outright and keeps the project runtime-free,
-   which is the entire point of it.
-3. **Failing that, test Raw Input** as a way to read the tracker while the runtime
-   holds it. It would let the two coexist without knowing how the runtime works.
-4. **Phase 4b, the lens distortion** — which never needed the display. The barrel
-   warp and the stereo pair are a post-process on an offscreen texture, developable
-   and inspectable in a window, so this is the obvious software task at any moment
-   the hardware is uncooperative. Constants are in
-   [ROADMAP.md](ROADMAP.md#4b-barrel-distortion--this-is-not-optional).
-
-Phase 4a is nearly nothing once the panel and the tracker can coexist: the player
-already takes `--monitor N` and `--fullscreen`, so only picking the right index
-remains.
+1. **Extend, not mirror**, then `--live --stereo --fullscreen --monitor N`.
+2. **Chromatic aberration** once the warp has been judged through the lenses.
+3. Do not reinstall the Oculus runtime. It hid the panel; uninstalling released it.

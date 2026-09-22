@@ -21,32 +21,23 @@ pitch and roll to within 1.7° of measured gravity and drifts 0.21 °/s in yaw.
 equirectangular video at 90 fps in a window, aimed by real head motion — verified
 live off the headset as well as against recorded captures.
 
-**One blocker is left, and it is a deadlock, not a dead cable.** The panel *does*
-work: with a legacy Oculus runtime running, Windows detects the HDMI display and a
-demo scene rendered on the headset (observed 2026-09-21). Kill the runtime and the
-panel goes dark again — but **the runtime holds the tracker exclusively**, so the
-two halves are mutually exclusive:
+**The deadlock is closed.** Uninstalling the Oculus runtime (0.8.0.0) released the
+panel: it enumerates as `EDID vendor OVR` / `Rift DK` at 1280×800 @ 60 Hz, and the
+tracker is ours at the same time. The runtime was *hiding* the display, not
+lighting it. Do not reinstall it.
 
-| Runtime running | Runtime killed |
-|---|---|
-| Panel detected, video renders | Panel dark |
-| Tracker locked (Win32 error 32) | Tracker ours, streams normally |
+**Phase 4b is built and confirmed live.** `--stereo` splits the window into
+left/right eyes with the DK1 lens-centre offset and the LibOVR barrel warp. A
+YouTube-style circular black mask was tried and reverted — filled halves were
+better. Chromatic aberration is not written.
 
-`tools/dk1_player.py` needs both at once and can currently have either.
+**What is left is Phase 4a:** Windows still *mirrors* the laptop onto the DK1
+instead of extending. `DisplaySwitch.exe /extend` did not change that. Until the
+desktop is extended, `--fullscreen --monitor N` cannot target a 1280×800 surface.
 
-**An earlier version of this file concluded the opposite** — that the hotplug
-signal never reaches the GPU, that the causes are physical, and that no software
-fix exists. That was drawn from probes taken with no runtime running and it is
-**wrong**. The physical path is proven good: socket, cable, control box, receiver,
-ribbon and panel all work. Don't buy a cable, adapter or splitter.
-
-The useful lead: `dk1_probe.py` already opens the HID device and already sends the
-keep-alive, and the panel still stays dark for us — so the runtime is not merely
-holding a session open, it **sends something specific that we do not**. We send
-exactly two feature reports, 2 and 8; anything else in the runtime's USB traffic is
-the answer. Find it with a capture and we can light the panel ourselves. Full
-handoff in
-[docs/STATUS.md](docs/STATUS.md#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
+An earlier version of this file said the panel was physically undetectable, then
+that the runtime was required to light it. Both were wrong. Full handoff in
+[docs/STATUS.md](docs/STATUS.md).
 
 **The tracker can also drop off USB**, as it did once mid-session — both device
 nodes reporting `Present: False`. Reseating the USB cable and the DC adapter
@@ -67,11 +58,14 @@ dk1/device.py        hidapi transport, keep-alive thread, report iterators,
 dk1/orientation.py   Mahony filter and calibrate(). Pure math, no I/O, so it
                      can be driven from a recorded capture anywhere.
 dk1/renderer.py      equirectangular shader on a fullscreen quad. Takes a GL
-                     context from the caller, so it also runs headless.
+                     context from the caller, so it also runs headless. Stereo
+                     split and barrel warp live here too.
+dk1/optics.py        DK1 screen and lens numbers. Pure math, no I/O.
 dk1/video.py         threaded decode, newest-frame handoff, test pattern.
 tools/dk1_probe.py   Phase 1 CLI (--list --sanity --live --raw --record)
 tools/dk1_orient.py  Phase 2 CLI (--live --replay)
-tools/dk1_player.py  Phase 3 CLI (--video --live --replay --fullscreen)
+tools/dk1_player.py  player (--video --live --replay --stereo --fullscreen)
+tests/test_optics.py lens offset and viewport split; no hardware, no GL
 tools/make_test_video.py  writes an equirectangular test clip
 tools/dk1_display.py display probe (--list --modes); ctypes QueryDisplayConfig,
                      no new dependency
@@ -87,9 +81,10 @@ docs/                status, protocol reference, roadmap
 - **Never add a dependency on the Oculus SDK, LibOVR, or any Oculus runtime.**
   Avoiding them is the entire point of the project — they are unsupported on
   Windows 11.
-- **`dk1/protocol.py` and `dk1/orientation.py` stay pure.** No I/O, no threads,
-  no hidapi. They must remain runnable and testable on a machine with no headset
-  attached — that is what makes `--replay` of a capture possible anywhere.
+- **`dk1/protocol.py`, `dk1/orientation.py` and `dk1/optics.py` stay pure.** No
+  I/O, no threads, no hidapi. They must remain runnable and testable on a
+  machine with no headset attached — that is what makes `--replay` of a capture
+  possible anywhere.
 - **The filter uses plain floats, not numpy.** It runs once per 1 kHz sample,
   where per-call array overhead would dwarf the dozen operations it needs.
 - **hidapi is imported softly** in `dk1/device.py`, and **OpenCV is imported
@@ -102,6 +97,7 @@ docs/                status, protocol reference, roadmap
 ```bat
 python tests\test_protocol.py
 python tests\test_orientation.py
+python tests\test_optics.py
 python tests\test_video.py
 python tests\test_renderer.py
 ```
@@ -124,16 +120,15 @@ python tests\test_renderer.py
  without magnetometer calibration. Planned fix is a recentre key, not a
  fight with the magnetometer. Measured gyro bias at rest is ~0.046 rad/s,
  about 150° of yaw per minute, so subtract an estimated bias.
-6. **A legacy Oculus runtime on this machine claims the tracker exclusively.**
- While `OVRServer_x64.exe` runs, opening the HID path fails with Win32 error
- 32, and since hidapi opens devices merely to enumerate them, the tracker
- disappears from `--list` rather than appearing as busy. **As of 2026-09-22 it is
- back to `Automatic` and running**, so it claims the tracker on every boot —
- check it before concluding the hardware is missing. `explain_invisible_device()` in `device.py` exists to
- tell this apart from a genuinely absent device — don't let a future change
- collapse the two cases back into "check your power brick". **This is no longer
- a nuisance — it is the project's open problem**, because the runtime is also
- currently the only thing that lights the panel. See gotcha 13.
+6. **A leftover Oculus runtime claims the tracker exclusively.** While
+ `OVRServer_x64.exe` runs, opening the HID path fails with Win32 error 32,
+ and since hidapi opens devices merely to enumerate them, the tracker
+ disappears from `--list` rather than appearing as busy.
+ `explain_invisible_device()` in `device.py` exists to tell this apart from a
+ genuinely absent device — don't let a future change collapse the two cases
+ back into "check your power brick". **As of 2026-09-22 evening the runtime is
+ uninstalled** (`OVRService` is not registered). Do not reinstall it: it was
+ also hiding the HDMI panel from Windows. See gotcha 13.
 7. **Ignore the first report after opening.** It carries the firmware's
  accumulated backlog (`sample_count` up to 87 observed), so its first sample's
  `dt` can be tens of milliseconds and will jolt the orientation filter.
@@ -160,16 +155,16 @@ python tests\test_renderer.py
  error tells them apart: **32** means another process holds it (the runtime),
  **2** means the node is a ghost and the hardware is gone. Check
  `Present`, not `Status`, in `Get-PnpDevice`.
-13. **The panel and the tracker are currently mutually exclusive.** A legacy
- Oculus runtime is the only thing that makes Windows detect the HDMI display,
- and that same runtime claims the tracker exclusively. Killing it frees the
- tracker and kills the panel. Don't write code that assumes it can have both
- until the USB capture in [docs/STATUS.md](docs/STATUS.md) says how the runtime
- turns the display on. Two escape routes are open: send the same command
- ourselves (preferred — keeps the project runtime-free), or read the tracker
- through the Windows Raw Input API, which is fed by the HID class driver rather
- than by an exclusive file handle. `protocol.py` is pure bytes-in, so a second
- transport slots in beside hidapi without touching the decode or the filter.
+13. **The panel and the tracker can now run together.** Uninstalling runtime
+ 0.8.0.0 released the EDID (`OVR` / `Rift DK`) and freed the HID path. What is
+ left is Windows *mirroring* the laptop onto that display instead of
+ extending it, so `--fullscreen --monitor N` cannot yet target 1280×800.
+ `DisplaySwitch.exe /extend` already failed once. USB capture and Raw Input
+ are obsolete unless someone reinstalls the runtime — don't.
+14. **Stereo is filled halves, not circular masks.** A YouTube-style black
+ circle around each lens centre was tried live and looked worse. The current
+ shader fills each 640×800 viewport and warps from the DK1 lens centre. Don't
+ put the mask back.
 
 ## Verification style
 

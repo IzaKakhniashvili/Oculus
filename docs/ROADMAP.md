@@ -178,37 +178,45 @@ cheaper.
 
 ## Phase 4 — Display output and lens distortion
 
-Two separate problems, both unproven.
+Two separate problems. 4b is done; 4a is now "extend the desktop", not "find
+the panel".
 
-### 4a. Getting a fullscreen window onto the DK1 — blocked on a deadlock, not on EDID
+### 4a. Getting a fullscreen window onto the DK1 — panel enumerates, still mirrored
 
-**This section anticipated the wrong problem, and so did its first correction.**
-It originally assumed the panel would be detected and that its unusual EDID might
-not offer 1280×800 @ 60 Hz. It was then rewritten to say Windows never detects the
-panel at all and that the fault is physical. Both are wrong.
+**This section anticipated the wrong problem twice.** It originally assumed the
+panel would be detected and that its unusual EDID might not offer 1280×800 @
+60 Hz. It was then rewritten to say Windows never detects the panel, then that
+the runtime was required to light it. All three are wrong.
 
-What actually happens: **the panel lights and renders, but only while a legacy
-Oculus runtime is running — and that runtime claims the tracker exclusively.** The
-player needs both at once and can have either. Full reasoning in
-[STATUS.md](STATUS.md#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
+What actually happens: **uninstalling Oculus runtime 0.8.0.0 released the
+panel.** It enumerates as `EDID vendor OVR` / `Rift DK` at 1280×800 @ 60 Hz,
+and the tracker is ours at the same time. The runtime was *hiding* the display
+via the AMD driver's hide-this-EDID list. Do not reinstall it. Full reasoning
+in [STATUS.md](STATUS.md).
 
-The code side of 4a is nevertheless done. `tools/dk1_player.py` already takes
-`--fullscreen` and `--monitor N` and toggles fullscreen on `f`, so once a display
-appears the only remaining work is picking the right index — auto-detecting the
-1280×800 monitor is a convenience, and the manual flag exists because
-auto-detection would eventually pick wrong anyway.
+The remaining 4a work is Windows: the desktop is still *mirrored* onto the DK1
+instead of extended. `DisplaySwitch.exe /extend` did not change that.
+`--fullscreen` and `--monitor N` are already in `tools/dk1_player.py`; they
+cannot target a 1280×800 surface until the display is extended.
 
-### 4b. Barrel distortion — this is not optional
+### 4b. Barrel distortion and stereo — **DONE**, confirmed live
 
-The DK1's lenses apply strong pincushion distortion. Rendering an undistorted
-image produces a warped, unusable picture. The image must be **pre-distorted
-with the inverse (barrel) warp** so the lenses cancel it.
+Built as `dk1/optics.py` plus `render_stereo()` in `dk1/renderer.py`. Confirmed
+live with `--video nasa_webb_360.mp4 --live --stereo` (17079 frames, ~4 min).
+A YouTube-style circular black mask around each lens centre was tried and
+reverted — filled 640×800 halves looked better.
 
-Also required: **stereo**. Two viewports of 640×800, each with its own lens
-centre offset.
+The DK1's lenses apply strong pincushion distortion. The image is
+**pre-distorted with the inverse (barrel) warp** so the lenses cancel it, in
+the same shader as the equirect lookup (not a render-to-texture post-process).
+`--no-distortion` / `d` leave identity K for A/B.
 
-Canonical DK1 optical constants — *verify against the actual unit, these are the
-standard LibOVR defaults:*
+Stereo is two viewports of 640×800, each with its own lens-centre offset, both
+showing the same monocular 360° image. True stereoscopic 360 needs over/under
+source footage and is not written. Chromatic aberration is not written.
+
+Canonical DK1 optical constants, now in `dk1/optics.py` — LibOVR defaults,
+verified only as numbers, not against a measured lens:
 
 | Parameter | Value |
 |---|---|
@@ -220,7 +228,7 @@ standard LibOVR defaults:*
 | Interpupillary distance | 0.064 m (per-user) |
 | Resolution | 1280 × 800 |
 | Distortion K | `[1.0, 0.22, 0.24, 0.0]` |
-| Chromatic aberration | `[0.996, −0.004, 1.014, 0.0]` |
+| Chromatic aberration | `[0.996, −0.004, 1.014, 0.0]` (unused) |
 
 The distortion is a radial polynomial about the lens centre:
 
@@ -228,33 +236,22 @@ The distortion is a radial polynomial about the lens centre:
 r′ = r · (K₀ + K₁r² + K₂r⁴ + K₃r⁶)
 ```
 
-Implement it as a post-process: render each eye to an offscreen texture, then
-sample that texture through the inverse warp when drawing to the screen.
-Chromatic aberration correction samples R, G and B at slightly different radii —
-add it only once the monochrome warp looks right.
-
-For 360° *video* specifically, stereo can begin as the same monocular image
-drawn to both eyes with the correct per-eye lens offset. True stereoscopic 360
-requires over/under stereo source footage.
-
 ---
 
 ## Suggested order
 
 1. ~~Confirm Phase 1 on hardware (`--sanity`).~~ Done.
 2. ~~Measure the axis mapping.~~ Done — it is the identity.
-3. ~~Check the HDMI display works.~~ Done — **it works**, but only under a legacy
-   Oculus runtime, which locks the tracker. Breaking that deadlock is now the
-   open question, and it is a software one. See
-   [STATUS.md](STATUS.md#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
+3. ~~Check the HDMI display works.~~ Done — it enumerates as `OVR` / `Rift DK`
+   after uninstalling the runtime. The remaining work is extending the
+   desktop, not lighting the panel. See [STATUS.md](STATUS.md).
 4. ~~Phase 2 filter, verified against a recorded capture.~~ Done.
 5. ~~Phase 3 renderer in a normal desktop window first.~~ Done, verified against a
    replayed capture **and driven live off the headset** at 90 fps.
-6. **Phase 4b — distortion, then stereo — can start now.** It never needed the
-   display. 4a is code-complete and waits on step 3.
+6. ~~Phase 4b — stereo split and barrel warp.~~ Done, confirmed live. Chromatic
+   aberration is the leftover piece of 4b.
+7. **Phase 4a — extend the desktop onto the DK1**, then
+   `--live --stereo --fullscreen --monitor N`.
 
-Steps 5 and 6 are deliberately separated: debugging a renderer while wearing a
+Steps 5 and 6 were deliberately separated: debugging a renderer while wearing a
 headset with a warped image is miserable. Get it correct on a monitor first.
-Building Phase 3 ahead of step 3 was a deliberate reordering: it is the only
-remaining work the display cannot block, and the player runs mouse-driven with no
-hardware attached at all.

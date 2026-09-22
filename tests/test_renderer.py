@@ -176,6 +176,62 @@ def test_wrap_modes():
     return ok
 
 
+def test_stereo_draws_both_eyes():
+    """The right half must not stay black, and each lens centre must look forward.
+
+    Sampling the viewport centre would be the wrong test: on a DK1 that point is
+    ~8° off the optical axis, so it misses the forward marker and still looks
+    fine in a window. The pixel through the lens is what the eye actually sees.
+    """
+    ok = True
+    with Offscreen(size=(256, 128)) as gl:
+        import numpy as np
+        from dk1.optics import lens_center_ndc
+
+        gl.fbo.clear(0.0, 0.0, 0.0, 1.0)
+        gl.renderer.render_stereo(IDENTITY, 256, 128, distort=False)
+        raw = np.frombuffer(gl.fbo.read(components=3), dtype=np.uint8)
+        image = raw.reshape((128, 256, 3))
+
+        def sample_lens(eye, x0, eye_w):
+            lx, _ = lens_center_ndc(eye)
+            # NDC x = -1 + 2*(px+0.5)/eye_w  =>  px = (ndc+1)*eye_w/2 - 0.5
+            px = int(round((lx + 1.0) * eye_w / 2.0 - 0.5))
+            return image[64, x0 + px]
+
+        left = sample_lens("left", 0, 128)
+        right = sample_lens("right", 128, 128)
+        ok &= near_colour("left lens looks forward", left, FORWARD)
+        ok &= near_colour("right lens looks forward", right, FORWARD)
+        ok &= check("right half is not the clear colour",
+                    tuple(int(c) for c in right) != (0, 0, 0), True)
+    return ok
+
+
+def test_identity_warp_matches_mono():
+    """k = (1,0,0,0) and a centred lens must be the original Phase 3 shader.
+
+    If this drifts, every existing pixel assertion is testing a different
+    projection than the player uses in mono.
+    """
+    ok = True
+    with Offscreen(size=(128, 128)) as gl:
+        import numpy as np
+
+        gl.fbo.clear(0.0, 0.0, 0.0, 1.0)
+        gl.renderer.render(IDENTITY, aspect=1.0)
+        mono = np.frombuffer(gl.fbo.read(components=3), dtype=np.uint8).copy()
+
+        gl.fbo.clear(0.0, 0.0, 0.0, 1.0)
+        gl.renderer._draw(IDENTITY, (math.tan(math.radians(30.0)),
+                                     math.tan(math.radians(30.0))),
+                          (0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
+        identity = np.frombuffer(gl.fbo.read(components=3), dtype=np.uint8)
+        ok &= check("identity warp + centred lens == mono render",
+                    bytes(mono) == bytes(identity), True)
+    return ok
+
+
 def _yaw_matrix(angle: float):
     c, s = math.cos(angle), math.sin(angle)
     return (c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c)
@@ -196,6 +252,8 @@ if have_gl:
     run("looking in each direction", test_looking_directions)
     run("the filter aims the view", test_filter_drives_the_renderer)
     run("texture wrap modes", test_wrap_modes)
+    run("stereo draws both eyes", test_stereo_draws_both_eyes)
+    run("identity warp matches mono", test_identity_warp_matches_mono)
 
 print("\n" + ("ALL PASS" if failures == 0 else f"{failures} TEST GROUP(S) FAILED"))
 sys.exit(1 if failures else 0)

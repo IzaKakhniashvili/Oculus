@@ -15,7 +15,8 @@ The code is OS-portable; only display enumeration is platform-specific.
 | 1 | USB HID transport + packet decode | **done, confirmed on hardware** |
 | 2 | Orientation filter (quaternion) | **done, confirmed on hardware** |
 | 3 | 360° video renderer | **done, confirmed on hardware** — live head motion, 90 fps |
-| 4 | Fullscreen output on the DK1 display | blocked — the panel lights only while the Oculus runtime runs, and that runtime locks the tracker |
+| 4a | Fullscreen on the DK1 display | panel enumerates (`OVR` / `Rift DK`, 1280×800); desktop is still mirrored, not extended |
+| 4b | Stereo split + barrel warp | **done, confirmed live** — `--stereo`; circular mask tried and reverted |
 
 ## Setup (on the Windows 11 laptop)
 
@@ -89,12 +90,18 @@ python tools\dk1_player.py --video clip.mp4 --live
 
 The video must be **equirectangular** — a single 2:1 frame covering the whole
 sphere, which is what a 360° camera gives you. Turn the headset and the view
-turns. `r` recentres, `f` toggles fullscreen, `space` pauses, `q` quits.
+turns. `r` recentres, `f` toggles fullscreen, `s` toggles stereo, `d` toggles
+the barrel warp (stereo only), `space` pauses, `q` quits.
+
+`--stereo` splits the window into left/right 640×800 halves, each aimed from the
+DK1 lens centre with the LibOVR barrel polynomial. A circular black mask around
+each eye was tried live and looked worse; the current code fills the halves.
 
 Prefer H.264 in an `.mp4`. OpenCV's bundled decoders handle VP9 and AV1 in
 `.webm` inconsistently; a window that stays black while the decoded counter rises
 is that, not a renderer bug. A 1:1 frame instead of 2:1 means over/under
-stereoscopic footage, which will look squashed until Phase 4b handles stereo.
+stereoscopic footage; `--stereo` currently draws the same monocular image to
+both eyes, so over/under source will still look squashed.
 
 For freely-licensed test material, NASA's
 [Scientific Visualization Studio](https://svs.gsfc.nasa.gov/) publishes true 360°
@@ -103,6 +110,7 @@ footage as H.264 at 2:1, public domain. This one is 27 MB and plays at 90 fps:
 ```bat
 curl -L -o nasa_webb_360.mp4 https://svs.gsfc.nasa.gov/vis/a010000/a013000/a013091/Webb_S7_360_4K_Master.mp4
 python tools\dk1_player.py --video nasa_webb_360.mp4 --live
+python tools\dk1_player.py --video nasa_webb_360.mp4 --live --stereo
 ```
 
 It runs without the headset too, which is how the renderer gets worked on:
@@ -140,11 +148,12 @@ dk1/protocol.py     wire format: 21-bit unpacking, report layout, feature report
                     pure functions, no I/O, fully unit-tested
 dk1/device.py       hidapi transport, keep-alive thread, report/sample iterators
 dk1/orientation.py  Mahony filter: samples in, orientation quaternion out
-dk1/renderer.py     equirectangular shader on a fullscreen quad
+dk1/renderer.py     equirectangular shader; stereo split and barrel warp
+dk1/optics.py       DK1 screen and lens numbers (pure math)
 dk1/video.py        threaded decode, newest-frame handoff, test pattern
 tools/dk1_probe.py  Phase 1 diagnostic CLI
 tools/dk1_orient.py Phase 2: live orientation, or replay a capture through it
-tools/dk1_player.py Phase 3: the player
+tools/dk1_player.py the player (--video --live --replay --stereo --fullscreen)
 tools/make_test_video.py  writes an equirectangular test clip
 tools/dk1_display.py display probe: every video output, and what is attached
 tests/              run anywhere, no hardware needed
@@ -155,6 +164,7 @@ Run the tests with:
 ```bash
 python tests/test_protocol.py
 python tests/test_orientation.py
+python tests/test_optics.py
 python tests/test_video.py
 python tests/test_renderer.py
 ```
@@ -178,23 +188,22 @@ It skips itself on a machine with no usable OpenGL.
 - **Yaw will drift.** Phase 2's filter corrects pitch and roll against gravity,
   but yaw has no absolute reference without magnetometer calibration. Expect
   slow rotation; a recentre key is the practical fix.
-- **The panel and the tracker cannot currently be had at the same time.** The DK1
-  display *does* work — but only while a legacy Oculus runtime is running, and
-  that runtime claims the tracker exclusively. Kill it and the tracker comes back
-  while the panel goes dark. The player needs both, so Phase 4 is stuck on this
-  deadlock rather than on anything physical: the socket, cable, control box and
-  panel are all proven good. The way out is to find what the runtime sends over
-  USB that we do not, and send it ourselves. Diagnose with `python
-  tools\dk1_display.py --list` **while the runtime is running**; full reasoning in
-  [docs/STATUS.md](docs/STATUS.md#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
+- **The deadlock is closed.** Uninstalling Oculus runtime 0.8.0.0 released the
+  panel (`EDID vendor OVR` / `Rift DK` at 1280×800 @ 60 Hz) and freed the
+  tracker. The runtime was hiding the display, not lighting it. Do not
+  reinstall it. What is left is Windows *mirroring* the laptop onto the DK1
+  instead of extending, so `--fullscreen --monitor N` cannot yet target a
+  1280×800 surface. Diagnose with `python tools\dk1_display.py --list`. Full
+  reasoning in [docs/STATUS.md](docs/STATUS.md).
 
-  > An earlier version of this README said the panel was never detected and that
-  > the fault was physical. That was measured with no runtime running and it was
-  > wrong. No cable, adapter or splitter needs buying.
+  > Two earlier versions of this README were wrong: first that the panel was
+  > physically undetectable, then that the runtime was required to light it.
+  > No cable, adapter or splitter needs buying.
 - **The tracker can drop off USB.** It vanished once mid-session, with both device
   nodes reporting `Present: False`, and reseating the USB cable and the DC adapter
   brought it straight back. Reseat before investigating. See
   [docs/STATUS.md](docs/STATUS.md#resolved-the-tracker-dropped-off-usb-and-came-back).
-- **Lens distortion is mandatory, not cosmetic.** The DK1's lenses need a barrel
-  pre-warp or the image is unusable. See
-  [docs/ROADMAP.md](docs/ROADMAP.md#4b-barrel-distortion--this-is-not-optional).
+- **Lens distortion is in.** `--stereo` applies the LibOVR barrel polynomial
+  from each eye's lens centre. Chromatic aberration is not written. A
+  YouTube-style circular mask was tried and reverted. See
+  [docs/STATUS.md](docs/STATUS.md#phase-4b-as-built).

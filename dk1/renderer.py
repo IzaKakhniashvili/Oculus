@@ -15,6 +15,14 @@ from typing import Sequence, Tuple
 
 import numpy as np
 
+from dk1.optics import (
+    DISTORTION_K,
+    IDENTITY_K,
+    eye_viewports,
+    half_fov_tan,
+    lens_center_ndc,
+)
+
 VERTEX_SHADER = """
 #version 330
 
@@ -32,7 +40,9 @@ FRAGMENT_SHADER = """
 
 uniform sampler2D panorama;
 uniform mat3 rotation;
-uniform vec2 half_fov;   // tan of half the horizontal and vertical field of view
+uniform vec2 half_fov;     // tan of half the horizontal and vertical field of view
+uniform vec2 lens_center;  // NDC offset of the lens from the viewport centre
+uniform vec4 k;            // barrel pre-warp; (1,0,0,0) is a no-op
 
 in vec2 ndc;
 out vec4 colour;
@@ -41,9 +51,16 @@ const float TAU = 6.28318530717958647692;
 const float PI  = 3.14159265358979323846;
 
 void main() {
+    // Shift into the lens frame, then apply the radial polynomial. With
+    // k = (1,0,0,0) and lens_center = 0 this is the original Phase 3 ray.
+    vec2 theta = ndc - lens_center;
+    float r2 = dot(theta, theta);
+    float scale = k.x + k.y * r2 + k.z * r2 * r2 + k.w * r2 * r2 * r2;
+    vec2 warped = theta * scale;
+
     // The ray through this pixel in the eye's frame. -Z is forward, matching
     // both OpenGL convention and the sensor frame the tracker reports in.
-    vec3 ray = vec3(ndc.x * half_fov.x, ndc.y * half_fov.y, -1.0);
+    vec3 ray = vec3(warped.x * half_fov.x, warped.y * half_fov.y, -1.0);
     vec3 d = normalize(rotation * ray);
 
     // Equirectangular lookup. Using -d.z rather than d.z puts u = 0.5 straight
@@ -117,12 +134,40 @@ class PanoramaRenderer:
         self.texture.write(np.ascontiguousarray(frame))
 
     def render(self, rotation: Sequence[float], aspect: float) -> None:
-        """Draw one frame. ``rotation`` is 9 row-major floats, body to world."""
+        """Draw one mono frame. ``rotation`` is 9 row-major floats, body to world.
+
+        Lens centre is the viewport centre and the warp is identity, so this is
+        the Phase 3 path. Stereo goes through :meth:`render_stereo`.
+        """
         if self.texture is None:
             return
-
         half_v = math.tan(math.radians(self.fov_deg) / 2.0)
-        self.program["half_fov"].value = (half_v * aspect, half_v)
+        self._draw(rotation, (half_v * aspect, half_v), (0.0, 0.0), IDENTITY_K)
+
+    def render_stereo(self, rotation: Sequence[float], width: int, height: int,
+                      distort: bool = True) -> None:
+        """Draw both eyes into the current framebuffer, side by side.
+
+        Left half is the left eye, right half the right eye. Each uses the DK1
+        lens-centre offset so the optical axis goes through the lens, not through
+        the middle of the half-screen. ``distort`` applies the barrel pre-warp;
+        leave it on for the headset, off to judge the split on a monitor.
+        """
+        if self.texture is None:
+            return
+        left, right = eye_viewports(width, height)
+        hfov = half_fov_tan()
+        k = DISTORTION_K if distort else IDENTITY_K
+        self.ctx.viewport = left
+        self._draw(rotation, hfov, lens_center_ndc("left"), k)
+        self.ctx.viewport = right
+        self._draw(rotation, hfov, lens_center_ndc("right"), k)
+
+    def _draw(self, rotation: Sequence[float], half_fov: Tuple[float, float],
+              lens_center: Tuple[float, float], k: Tuple[float, float, float, float]) -> None:
+        self.program["half_fov"].value = half_fov
+        self.program["lens_center"].value = lens_center
+        self.program["k"].value = k
         self.program["rotation"].value = column_major(rotation)
         self.texture.use(0)
         self.program["panorama"].value = 0

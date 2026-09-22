@@ -17,6 +17,8 @@ worked on with no headset attached at all.
 
 Keys:
     r          recentre -- call the current heading straight ahead
+    s          toggle stereo (two eye viewports)
+    d          toggle barrel distortion (only matters in stereo)
     f          toggle fullscreen on the current monitor
     space      pause and resume the video
     q / esc    quit
@@ -181,6 +183,8 @@ class Player:
         self.args = args
         self.paused = False
         self.fullscreen = bool(args.fullscreen)
+        self.stereo = bool(args.stereo)
+        self.distort = not bool(args.no_distortion)
         self._windowed_rect = None
 
         self.frames_drawn = 0
@@ -250,7 +254,10 @@ class Player:
         tracking = HeadTracking(source, self.args.replay or "", self.args.pid, self.args.kp).start()
 
         self._install_input(glfw, window, tracking, monitors, monitor_index)
-        print("\nr recentre   f fullscreen   space pause   q quit\n")
+        print("\nr recentre   s stereo   d distortion   f fullscreen   space pause   q quit\n")
+        if self.stereo:
+            print("stereo on: left half = left eye, right half = right eye"
+                  + ("  (barrel warp on)" if self.distort else "  (no warp)"))
 
         last_status = 0.0
         frame_times = []
@@ -273,7 +280,11 @@ class Player:
 
                 ctx.viewport = (0, 0, width, height)
                 ctx.clear(0.0, 0.0, 0.0)
-                renderer.render(tracking.matrix, aspect=width / height)
+                if self.stereo:
+                    renderer.render_stereo(tracking.matrix, width, height,
+                                           distort=self.distort)
+                else:
+                    renderer.render(tracking.matrix, aspect=width / height)
                 glfw.swap_buffers(window)
 
                 self.frames_drawn += 1
@@ -313,6 +324,10 @@ class Player:
                 tracking.recentre()
             elif key == glfw.KEY_SPACE:
                 self.paused = not self.paused
+            elif key == glfw.KEY_S:
+                self.stereo = not self.stereo
+            elif key == glfw.KEY_D:
+                self.distort = not self.distort
             elif key == glfw.KEY_F:
                 self._toggle_fullscreen(glfw, win, monitors[monitor_index])
 
@@ -360,6 +375,8 @@ class Player:
             parts.append(f"decoded {video.frames_decoded} dropped {video.frames.dropped}")
         if not tracking.ready.is_set() or tracking.error:
             parts.append(tracking.status)
+        if self.stereo:
+            parts.append("STEREO" + ("+warp" if self.distort else ""))
         if self.paused:
             parts.append("PAUSED")
 
@@ -377,6 +394,10 @@ def main() -> int:
     ap.add_argument("--fov", type=float, default=90.0, help="vertical field of view (default 90)")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=800)
+    ap.add_argument("--stereo", action="store_true",
+                    help="split the window into left/right DK1 eye viewports")
+    ap.add_argument("--no-distortion", action="store_true",
+                    help="in --stereo, skip the barrel pre-warp (for judging the split on a monitor)")
     ap.add_argument("--fullscreen", action="store_true", help="start fullscreen")
     ap.add_argument("--monitor", type=int, default=0,
                     help="monitor index for fullscreen (0 = primary)")
