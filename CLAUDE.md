@@ -127,8 +127,9 @@ python tests\test_renderer.py
 6. **A legacy Oculus runtime on this machine claims the tracker exclusively.**
  While `OVRServer_x64.exe` runs, opening the HID path fails with Win32 error
  32, and since hidapi opens devices merely to enumerate them, the tracker
- disappears from `--list` rather than appearing as busy. `OVRService` is set
- to manual start now. `explain_invisible_device()` in `device.py` exists to
+ disappears from `--list` rather than appearing as busy. **As of 2026-09-22 it is
+ back to `Automatic` and running**, so it claims the tracker on every boot —
+ check it before concluding the hardware is missing. `explain_invisible_device()` in `device.py` exists to
  tell this apart from a genuinely absent device — don't let a future change
  collapse the two cases back into "check your power brick". **This is no longer
  a nuisance — it is the project's open problem**, because the runtime is also

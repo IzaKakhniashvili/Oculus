@@ -409,10 +409,15 @@ overreached. Two things to carry forward:
   true of *that* runtime. A different, DK1-era runtime was installed afterwards
   and behaves completely differently. Its logs saying `[TrackingManager] HMD
   connected` still refer to the USB tracker, and that reading was correct.
-- **The version now installed has not been recorded, and must be.** It is the
-  single most important reproducibility fact in the project: the difference
-  between a runtime that cannot light the panel and one that can. Get it from the
-  Config Utility's About box, or the installer filename.
+- **Recorded 2026-09-22, and it complicates the story.** The only Oculus runtime
+  installed is **`Oculus Runtime 0.8.0.0-public-release-117061`**, with
+  `OVRServiceLauncher.exe` reporting file version `0.8.0.0.117061`. Alongside it,
+  `Oculus Rift Sensor Driver 1.0.14.0`, installed 2026-09-11. **There is no
+  DK1-era runtime on the machine** — so the supposition above, that a second and
+  older runtime had been installed and was the one lighting the panel, is not
+  supported. Whatever put the demo on the panel did so with 0.8.0.0, the very
+  version that dropped DK1 display support at 0.5.0.1. Either that history is
+  wrong, or 0.8.0.0 retains a path nobody documented.
 
 The hotplug → EDID → display-device chain described in the old text is still an
 accurate account of how any monitor comes up, and still explains what the probe
@@ -433,12 +438,59 @@ sees with the runtime stopped. It was simply never the whole story.
 **None of this has been re-run with the runtime up, and all of it should be.**
 That is task 2 below.
 
+### A third output appeared and vanished, 2026-09-22 — possibly the DK1's connector
+
+Two `--list` runs nineteen minutes apart, with nothing deliberately plugged or
+unplugged in between:
+
+| Time | Reported |
+|---|---|
+| 20:40 | **9 paths over 3 outputs** — 256 internal, **257 `DVI`**, 258 `DisplayPort` |
+| 20:59 | 6 paths over 2 outputs — the usual 256 and 258. Target 257 gone. |
+
+The 20:40 run used the pre-fix probe; the 20:59 run used the corrected one and its
+`QDC_INCLUDE_HMD` diff was empty. But the flag is not what differs here — the
+extra output was in the plain `QDC_ALL_PATHS` answer both times, present in one and
+absent in the other.
+
+**A connector that comes and goes on its own is worth chasing**, and target 257 is
+the best candidate so far for the DK1's own. It also sits awkwardly with the
+vendor-hide theory above: an EDID permanently excluded by the AMD driver should
+never produce a *target* at all. Either the exclusion is not permanent, or 257 is
+something else entirely — a dock, or a connector the driver enumerates
+speculatively. **If it reappears, capture `--list` and `--modes` immediately**,
+before it goes again.
+
+A same-state probe was also run at 21:12 with `OVRService` Running and the tracker
+present, and it returned the plain two-output baseline with an empty
+`QDC_INCLUDE_HMD` diff. Per the confirmed finding above, **that says nothing about
+whether the panel was lit** — the demo was seen rendering in exactly that kind of
+probe-negative state. Recorded only so it is not mistaken later for evidence that
+the service had stopped working.
+
+### State the machine was left in, 2026-09-22
+
+Before a restart: **`OVRService` Running and set to `Automatic`**, so it claims the
+tracker on every boot and `--live` will fail with Win32 error 32 until it is
+stopped. To hand the tracker back, in an elevated shell:
+
+```bat
+sc config OVRService start= demand
+taskkill /F /IM OVRServer_x64.exe /IM OVRServiceLauncher.exe
+```
+
+Do this only when the tracker is what you need. Stopping the service is one half of
+the deadlock, and while the uninstall test above is still pending, the runtime is
+the only thing known to have put a picture on the panel.
+
 ### What to measure next, in order
 
 **1. Record the runtime version.** Config Utility → About, or the installer
 filename. Nothing else here is reproducible without it.
 
-**2. Probe the display in the working state.** Never been done:
+**2. Probe the display in the working state.** Attempted 2026-09-22 with the
+service running and the panel still dark — see above; the service alone is not the
+working state, so establishing what *is* comes first:
 
 ```bat
 python tools\dk1_display.py --list
