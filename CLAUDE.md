@@ -21,19 +21,32 @@ pitch and roll to within 1.7° of measured gravity and drifts 0.21 °/s in yaw.
 equirectangular video at 90 fps in a window, aimed by real head motion — verified
 live off the headset as well as against recorded captures.
 
-**One blocker is left: Windows does not see the DK1 panel, and no software can
-change that.** To the PC the DK1 is an ordinary external monitor — there is no
-driver in the path, and Direct Mode arrived with the DK2. A monitor comes up in a
-fixed order: hotplug detect, then EDID over DDC, then a display device and a mode.
-This laptop's one external output reports `targetAvailable = false` and the monitor
-history has only ever held the internal panel, so **the chain breaks at the first
-step** — the hotplug signal is not reaching the GPU, nothing was ever misread, and
-an EDID override has no detected monitor to attach to. Probe with `python
-tools\dk1_display.py --list`. The Oculus runtime never detected it either; its "HMD
-connected" refers to the USB tracker. The remaining causes are all physical: the
-cable, the socket, or the DK1's own video path. **Don't spend another session
-looking for a software fix** — the cheapest untested variable is the socket, so
-plug any ordinary monitor into it first.
+**One blocker is left, and it is a deadlock, not a dead cable.** The panel *does*
+work: with a legacy Oculus runtime running, Windows detects the HDMI display and a
+demo scene rendered on the headset (observed 2026-09-21). Kill the runtime and the
+panel goes dark again — but **the runtime holds the tracker exclusively**, so the
+two halves are mutually exclusive:
+
+| Runtime running | Runtime killed |
+|---|---|
+| Panel detected, video renders | Panel dark |
+| Tracker locked (Win32 error 32) | Tracker ours, streams normally |
+
+`tools/dk1_player.py` needs both at once and can currently have either.
+
+**An earlier version of this file concluded the opposite** — that the hotplug
+signal never reaches the GPU, that the causes are physical, and that no software
+fix exists. That was drawn from probes taken with no runtime running and it is
+**wrong**. The physical path is proven good: socket, cable, control box, receiver,
+ribbon and panel all work. Don't buy a cable, adapter or splitter.
+
+The useful lead: `dk1_probe.py` already opens the HID device and already sends the
+keep-alive, and the panel still stays dark for us — so the runtime is not merely
+holding a session open, it **sends something specific that we do not**. We send
+exactly two feature reports, 2 and 8; anything else in the runtime's USB traffic is
+the answer. Find it with a capture and we can light the panel ourselves. Full
+handoff in
+[docs/STATUS.md](docs/STATUS.md#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
 
 **The tracker can also drop off USB**, as it did once mid-session — both device
 nodes reporting `Present: False`. Reseating the USB cable and the DC adapter
@@ -117,7 +130,9 @@ python tests\test_renderer.py
  disappears from `--list` rather than appearing as busy. `OVRService` is set
  to manual start now. `explain_invisible_device()` in `device.py` exists to
  tell this apart from a genuinely absent device — don't let a future change
- collapse the two cases back into "check your power brick".
+ collapse the two cases back into "check your power brick". **This is no longer
+ a nuisance — it is the project's open problem**, because the runtime is also
+ currently the only thing that lights the panel. See gotcha 13.
 7. **Ignore the first report after opening.** It carries the firmware's
  accumulated backlog (`sample_count` up to 87 observed), so its first sample's
  `dt` can be tens of milliseconds and will jolt the orientation filter.
@@ -144,6 +159,16 @@ python tests\test_renderer.py
  error tells them apart: **32** means another process holds it (the runtime),
  **2** means the node is a ghost and the hardware is gone. Check
  `Present`, not `Status`, in `Get-PnpDevice`.
+13. **The panel and the tracker are currently mutually exclusive.** A legacy
+ Oculus runtime is the only thing that makes Windows detect the HDMI display,
+ and that same runtime claims the tracker exclusively. Killing it frees the
+ tracker and kills the panel. Don't write code that assumes it can have both
+ until the USB capture in [docs/STATUS.md](docs/STATUS.md) says how the runtime
+ turns the display on. Two escape routes are open: send the same command
+ ourselves (preferred — keeps the project runtime-free), or read the tracker
+ through the Windows Raw Input API, which is fed by the HID class driver rather
+ than by an exclusive file handle. `protocol.py` is pure bytes-in, so a second
+ transport slots in beside hidapi without touching the decode or the filter.
 
 ## Verification style
 

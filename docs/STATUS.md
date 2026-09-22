@@ -1,9 +1,15 @@
 # Status & handoff
 
-**As of 2026-09-18.** Phases 1 to 3 are built and confirmed on hardware: turning
+**As of 2026-09-22.** Phases 1 to 3 are built and confirmed on hardware: turning
 the real headset turns a 360° video at 90 fps, in a window. The one thing left
-between that and watching it *in* the headset is the DK1 panel, which has never
-been detected — and that is now the only open problem in the project.
+between that and watching it *in* the headset is a **deadlock**: the DK1 panel
+lights only while a legacy Oculus runtime is running, and that runtime holds the
+tracker exclusively. That is now the only open problem in the project.
+
+> **Correction, 2026-09-22.** Everything this document previously said about the
+> panel being undetectable and the fault being physical was measured with no
+> runtime running, and is wrong. The display works. See
+> [the display section](#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
 
 ## Phase table
 
@@ -12,7 +18,7 @@ been detected — and that is now the only open problem in the project.
 | 1 | USB HID transport + packet decode | **Hardware-confirmed.** |
 | 2 | Orientation filter (quaternion) | **Built and hardware-confirmed.** |
 | 3 | 360° video renderer | **Built and hardware-confirmed.** Live head motion drives 360° video at 90 fps. |
-| 4 | Fullscreen + lens distortion on the DK1 display | Blocked — the panel is not detected. |
+| 4 | Fullscreen + lens distortion on the DK1 display | Blocked — the panel and the tracker are mutually exclusive. |
 
 ## What exists
 
@@ -94,8 +100,9 @@ Two numbers above are worth carrying into Phase 2:
 
 **Still not verified:**
 
-- **The DK1 display.** Never connected, and it is now the only unknown left that
-  can invalidate a whole phase. See "Open risk" below.
+- **The DK1 display driven by our own code.** It renders under the Oculus
+  runtime, but the runtime locks the tracker, so the player has never driven it.
+  See the display section below.
 
 ## Environment on the Windows laptop
 
@@ -319,180 +326,170 @@ the panel: the same box now runs the tracker indefinitely without trouble. The
 display and the USB dropout look like two separate problems after all, and only
 the display is still open.
 
-## Open problem: the display, and why it cannot be turned on in software
+## Open problem: the display needs the runtime, and the runtime takes the tracker
 
-**Windows does not see the DK1 panel at all.** Probe it with:
+**Corrected 2026-09-22.** This section previously concluded that the panel had
+never been detected, that the hotplug signal was not reaching the GPU, and that
+the remaining causes were all physical — cable, socket, or the DK1's own video
+path. **That conclusion was wrong.** Every probe behind it was taken with no
+Oculus runtime running, and it did not survive the first test in the other state.
 
-```bat
-python tools\dk1_display.py --list
-python tools\dk1_display.py --modes
-```
+### What actually happens
 
-### The mechanism, so the conclusion is not just an assertion
+A legacy Oculus runtime was installed and started. **Windows detected the HDMI
+display, and a demo scene rendered on the headset** (observed 2026-09-21). Kill
+the runtime and the panel goes dark again, while the tracker becomes ours.
 
-To the PC, the DK1 is an **ordinary external monitor**. It is not a VR device with
-a driver: the control box contains an HDMI receiver wired to a 1280×800 LCD, and it
-presents itself exactly as a small desktop display would. There is no Oculus
-software in the path and, on a DK1, there never was — Direct Mode arrived with the
-DK2.
+| | Runtime running | Runtime killed |
+|---|---|---|
+| DK1 panel | detected, renders | not detected |
+| Tracker | locked — open fails with Win32 error 32 | ours, ~926 reports/s |
 
-Bringing any monitor up happens in a fixed order, and each step depends on the one
-before it:
+Two consequences.
 
-1. **Hotplug Detect.** The sink pulls a dedicated pin on the connector high. This
-   is how the GPU learns anything is plugged in at all. It is an electrical
-   signal, not a negotiation.
-2. **EDID.** Only once HPD is asserted does the driver read the monitor's EDID
-   over the DDC/I²C lines to learn its supported timings.
-3. **A display device, then a mode.** Windows creates a monitor device from that
-   EDID, adds a video *target* with a sink attached, and only then can anything be
-   rendered to it.
+**The physical path is proven good.** The laptop's HDMI socket, the cable, the
+control box's HDMI input, its video receiver, the ribbon and the panel all work —
+a picture appeared on them. The hardware bisection this document used to
+recommend is moot, and no cable, adapter or splitter needs buying.
 
-**Our probe shows the chain breaking at step 1.** The single external output
-reports `targetAvailable = false` — no sink detected — and
-`HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY` has only ever contained the internal
-panel, so no EDID was ever read and no monitor device was ever created, at any
-point in this machine's history.
+**What is left is a deadlock.** `tools/dk1_player.py` needs the panel *and* the
+tracker, and each state offers exactly one.
 
-That is why this cannot be fixed in software, and specifically why the two usual
-tricks do not apply:
+### What that rules in and out
 
-- **A registry EDID override** (`EDID_OVERRIDE`) fixes a monitor that reports a
-  *bad* EDID. It has to be attached to an existing monitor device instance, which
-  only exists after steps 1 and 2 succeed. Here there is nothing to attach it to —
-  nothing is being misread, because nothing is being read.
-- **Forcing a mode** requires a display path with a sink on it. There is no sink.
-  Some NVIDIA drivers can force output on a connector regardless; this laptop is
-  AMD-only and its driver exposes no equivalent, and `DisplaySwitch.exe /extend`
-  correspondingly changed nothing.
+**It is not a driver install.** A driver persists once installed; this does not.
+Something the runtime does *while it is alive* holds the display up.
 
-So the fault is upstream of every layer software can reach: **the hotplug signal is
-not arriving at the GPU.** Everything below is the evidence for that, and the
-remaining causes are all physical.
+**It is not merely an open USB session either — and this is the useful part.**
+`dk1_probe.py` opens the HID device and sends the keep-alive (report 8)
+continuously, and the panel stays dark for us. So the runtime is not just keeping
+a session alive: it **sends something we do not**. That is a specific, findable
+difference rather than a vague one.
 
-**One variable is still untested, and it is the cheapest one.** Nothing else has
-ever been plugged into that HDMI socket during this investigation, so "the socket
-works" is an assumption, not a finding. A known-good monitor on that port splits
-the problem in half in a single test — see the next step below.
+We send exactly two feature reports — **2** (sensor config) and **8**
+(keep-alive). Anything else in the runtime's traffic to VID `0x2833` is the
+answer.
 
-### Ruling out a software cause
+### Why the earlier probes said otherwise
 
-What the probe establishes, as of 2026-09-18 with the HDMI reportedly connected:
+They were sound measurements of one state; the conclusion drawn from them
+overreached. Two things to carry forward:
+
+- **The "the runtime never saw the display either" test is superseded.** It used
+  the runtime already on the machine, **SDK 0.8.0.0**, which dropped DK1 display
+  support at 0.5.0.1 and genuinely cannot drive this panel — so that finding was
+  true of *that* runtime. A different, DK1-era runtime was installed afterwards
+  and behaves completely differently. Its logs saying `[TrackingManager] HMD
+  connected` still refer to the USB tracker, and that reading was correct.
+- **The version now installed has not been recorded, and must be.** It is the
+  single most important reproducibility fact in the project: the difference
+  between a runtime that cannot light the panel and one that can. Get it from the
+  Config Utility's About box, or the installer filename.
+
+The hotplug → EDID → display-device chain described in the old text is still an
+accurate account of how any monitor comes up, and still explains what the probe
+sees with the runtime stopped. It was simply never the whole story.
+
+### Evidence — all of it gathered with the runtime NOT running
 
 | Finding | Evidence |
 |---|---|
 | This laptop has exactly **one** external video output | `QueryDisplayConfig` reports 2 targets: 256 (internal panel) and 258. The 6 paths are those 2 targets × 3 desktop sources. |
-| Nothing is attached to it | target 258 reports `targetAvailable = false` |
-| Windows has **never** seen the DK1 | `HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY` holds one entry ever, `SDC4154`, the internal panel. No stale `OVR` entry. |
-| It is not being hidden as an HMD | querying with `QDC_INCLUDE_HMD` returns the same two targets |
-| Nothing is claiming it in Direct Mode | there is no Oculus display driver installed; `C:\Program Files (x86)\Oculus\Drivers` contains only `RiftSensorDriver` |
+| Nothing attached to it | target 258 reports `targetAvailable = false` |
+| No monitor history | `HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY` held one entry, `SDC4154`, the internal panel |
+| Not hidden as an HMD | querying with `QDC_INCLUDE_HMD` returns the same two targets |
+| No second GPU owning the socket | ASUS Vivobook M3401QA, integrated Radeon only. The one external output *is* the HDMI socket — reported as a DisplayPort lane, which is normal for laptop HDMI. |
+| No cached EDID for any connector | nothing under `HKLM\SYSTEM\CurrentControlSet\Control\Video\{...}` |
+| `DisplaySwitch.exe /extend` changes nothing | the output still reports nothing attached |
 
-So this is **not** the EDID problem the roadmap anticipated, and not a mode-list
-problem. The link is not coming up at all — Windows sees no sink on the cable.
+**None of this has been re-run with the runtime up, and all of it should be.**
+That is task 2 below.
 
-Two things worth knowing before chasing it:
+### What to measure next, in order
 
-- **The one external output is reported as "DisplayPort", which does not mean the
-  laptop lacks an HDMI socket.** Laptop HDMI ports are commonly a DP lane with an
-  on-board converter, and Windows reports the lane, not the socket.
-- **A working tracker does not prove the panel has power.** Both are fed by the
-  control box's DC adapter, but the tracker enumerating only tells you the box is
-  powered, not that the panel is being driven.
+**1. Record the runtime version.** Config Utility → About, or the installer
+filename. Nothing else here is reproducible without it.
 
-### The Oculus runtime never saw the display either — tested
+**2. Probe the display in the working state.** Never been done:
 
-Worth settling, because "the runtime detected it" is a reasonable thing to
-conclude from what the runtime prints. The service was restarted and the display
-re-probed with it running: **no change** — same two outputs, target 258 still
-reporting nothing attached, no new monitor, no new registry entry.
-
-Its own logs in `%LOCALAPPDATA%\Oculus\ServerLog_*.txt` say why:
-
-```
-[TrackingManager] HMD connected
-[HMD] WARNING: Unable to change dynamic prediction mode setting
-[HMD] WARNING: Unable to change low persistence mode setting
+```bat
+python tools\dk1_display.py --list
+python tools\dk1_display.py --modes
+reg query "HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY"
 ```
 
-`TrackingManager` is the **USB tracker**. Across every server log there is not a
-single mention of EDID, display detection, direct mode, extended mode, or 1280 —
-the runtime detected the headset over USB and said "HMD connected" on that basis
-alone. The two warnings are DK2-era features a DK1 does not have.
+What matters is whether a **second** entry appears under `Enum\DISPLAY` carrying a
+real EDID — 1280×800, an Oculus vendor ID. If it does, the panel genuinely
+enumerates over the cable once the runtime acts, which means hotplug is being
+asserted and the runtime is switching the DK1's video side on. If the display
+appears with no corresponding monitor enumeration, it is coming from the driver
+side and the answer is a different one.
 
-Two other things the investigation turned up:
+**3. Catch the transition.** Start the watcher first, then start the runtime:
 
-- **The installed runtime is SDK 0.8.0.0**, from the PDB path inside
-  `DirectDisplayConfig.exe`. DK1 support ended at 0.5.0.1 and Extended Mode was
-  removed after 0.6, so this runtime cannot drive a DK1 display even in
-  principle.
-- **`DirectDisplayConfig.exe` is NVIDIA-only.** Its own strings are
-  `"DirectDisplay compatible NVidia runtime and/or GPU detected"` / `"not
-  detected. Skipping..."`. This laptop is AMD, so it has nothing to toggle.
-- The logs are full of `{ERR-027} Deadlock detected`, so the runtime is also
-  simply unstable with this device.
+```bat
+python tools\dk1_display.py --watch --seconds 60
+```
 
-**Conclusion: the panel has never been driven on this machine, by us or by the
-runtime.** Windows sees no sink on the cable, which makes this physical — cable
-or panel — and not something software can reach.
+**4. Capture the USB traffic — this is the one that ends the problem.** Install
+USBPcap, capture the root hub the DK1 is on, start the runtime, stop the capture,
+then filter Wireshark to the DK1's address and read the SET_REPORT / feature-out
+traffic. Any report ID that is not 2 or 8 is the lead. Implementing it is then a
+few lines in `dk1/protocol.py` and one call in `dk1/device.py`, and we light the
+panel ourselves with no runtime running at all.
 
-### What has been ruled out on the machine side
+Same discipline that pinned down the 21-bit packing: capture rather than guess.
 
-Reported state: the control box LED is lit, the video cable is in the laptop's
-own HDMI socket, and the tracker on the same control box works over USB.
+**5. If the runtime turns out to be unavoidable, test Raw Input.**
+`RegisterRawInputDevices` on HID usage page `0x03` usage `0x05` (Head Tracker —
+what the DK1 registers as) is fed by the HID class driver rather than by an
+exclusive file handle, so it may keep delivering reports while the runtime owns
+the device. **Unverified**, and cheap to settle with a script that registers for
+the usage page and prints whether anything arrives.
 
-| Ruled out | How |
-|---|---|
-| A second GPU owning the HDMI port | The machine is an ASUS Vivobook M3401QA with integrated Radeon only. No discrete GPU exists, present or hidden, so the one external output *is* the HDMI socket — reported as a DisplayPort lane, which is normal for laptop HDMI. |
-| The GPU having seen the panel before | No cached EDID under `HKLM\SYSTEM\CurrentControlSet\Control\Video\{...}` for any connector. |
-| Windows needing a nudge to extend | `DisplaySwitch.exe /extend` changed nothing; the output still reports nothing attached. |
-| A hotplug event arriving but being ignored | `dk1_display.py --watch` polled for 50 s and saw no connector change state at all. |
+It fits the architecture without disturbing it: `dk1/protocol.py` is pure
+bytes-in, samples-out, so a Raw Input transport slots in beside hidapi in
+`device.py` while the decode, the filter and the renderer stay untouched.
 
-### The remaining causes, all physical
+### An intermediate step available right now
 
-Since the hotplug signal is not reaching the GPU, something between the panel and
-the socket is not carrying it. In rough order of likelihood:
+With the runtime running, run the player in **mouse-look mode** — which needs no
+tracker — fullscreen on the panel:
 
-| Cause | Why it is plausible | How to test it |
-|---|---|---|
-| **The cable** | The most common DK1 failure by a wide margin, and the failure is often invisible: a cable can carry power and picture conductors fine while the HPD or DDC lines are broken, or be damaged only at a strain point. | Try a different HDMI cable. |
-| **The laptop's HDMI socket** | Never verified. Nothing else has been plugged into it during this investigation, so its working is an assumption. | Plug in any monitor or TV. |
-| **The control box's HDMI input** | DK1 boxes commonly lose one input while keeping the other, since HDMI and DVI-D are separate signal paths inside the box. | Use the DVI-D input with an HDMI-to-DVI-D cable. |
-| **The box's video receiver or the ribbon to the panel** | A lit LED and a working tracker prove only that the box has *power*. The USB tracker and the video receiver are independent circuits; the tracker working says nothing about the receiver being alive. | Try the DK1 on another computer. If no machine detects it on either input with a known-good cable, the box or panel is dead. |
+```bat
+python tools\dk1_player.py --video clip.mp4 --fullscreen --monitor N
+```
 
-**Do the socket test first.** Plugging an ordinary monitor or TV into that same
-HDMI socket with that same cable, with `dk1_display.py --watch` running, splits the
-problem in half for one minute's work:
+That proves we can render to the headset, separately from proving we can track
+while doing it, and it exercises the `--monitor` index choice that is all Phase 4a
+has left.
 
-- **It appears** → the socket and cable are both fine, and the fault is inside the
-  DK1's video path. Move on to the DVI-D input.
-- **It does not appear** → the fault is the cable or the socket, and the headset is
-  irrelevant to the problem. Swap the cable and repeat.
+### If the panel becomes usable while the tracker is still ours
 
-### If it does start being detected
-
-The rest of Phase 4 then applies as written in [ROADMAP.md](ROADMAP.md): confirm
-`--modes` offers 1280×800 @ 60 Hz, then `python tools\dk1_player.py --video
-clip.mp4 --live --fullscreen --monitor N`. The player already takes a monitor
-index and toggles fullscreen, so the only work left in 4a is choosing the right
-index. 4b, the barrel distortion and the stereo pair, is still unwritten.
+The rest of Phase 4 applies as written in [ROADMAP.md](ROADMAP.md): confirm
+`--modes` offers 1280×800 @ 60 Hz, then run the player with `--live --fullscreen
+--monitor N`. 4b, the barrel distortion and the stereo pair, is still unwritten —
+and it never needed the display.
 
 ## Next milestones
 
-**One hardware problem is left, and it is the display.** Everything else works:
-the tracker streams, the filter holds, and the player draws 360° video aimed by
-real head motion at 90 fps.
+**One problem is left and it is the deadlock above.** Everything else works: the
+tracker streams, the filter holds, and the player draws 360° video aimed by real
+head motion at 90 fps.
 
-1. **Bisect the video path.** Plug an ordinary monitor or TV into that same HDMI
-   socket with the same cable and run `dk1_display.py --watch`. If it appears, the
-   port and cable are fine and the fault is in the DK1's video path; if not, the
-   headset is irrelevant. Try the control box's **DVI-D input** too — a separate
-   signal path inside the box from its HDMI input.
-
-2. **Phase 4b, the lens distortion**, which does not need the display. The barrel
-   warp and the stereo pair are a post-process on an offscreen texture and can be
-   developed and inspected in a window like everything else, so this is the
-   obvious software task while the display is stuck. Constants are in
+1. **Record the installed runtime version**, then re-run the display probes with
+   it running. A minute's work, and nothing else is reproducible without it.
+2. **Capture the runtime's USB traffic** and find the feature report that turns the
+   panel on. This ends the problem outright and keeps the project runtime-free,
+   which is the entire point of it.
+3. **Failing that, test Raw Input** as a way to read the tracker while the runtime
+   holds it. It would let the two coexist without knowing how the runtime works.
+4. **Phase 4b, the lens distortion** — which never needed the display. The barrel
+   warp and the stereo pair are a post-process on an offscreen texture, developable
+   and inspectable in a window, so this is the obvious software task at any moment
+   the hardware is uncooperative. Constants are in
    [ROADMAP.md](ROADMAP.md#4b-barrel-distortion--this-is-not-optional).
 
-Phase 4a is nearly nothing once the panel is detected: the player already takes
-`--monitor N` and `--fullscreen`, so only picking the right index remains.
+Phase 4a is nearly nothing once the panel and the tracker can coexist: the player
+already takes `--monitor N` and `--fullscreen`, so only picking the right index
+remains.

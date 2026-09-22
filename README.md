@@ -15,7 +15,7 @@ The code is OS-portable; only display enumeration is platform-specific.
 | 1 | USB HID transport + packet decode | **done, confirmed on hardware** |
 | 2 | Orientation filter (quaternion) | **done, confirmed on hardware** |
 | 3 | 360° video renderer | **done, confirmed on hardware** — live head motion, 90 fps |
-| 4 | Fullscreen output on the DK1 display | blocked — the panel is not detected |
+| 4 | Fullscreen output on the DK1 display | blocked — the panel lights only while the Oculus runtime runs, and that runtime locks the tracker |
 
 ## Setup (on the Windows 11 laptop)
 
@@ -178,16 +178,19 @@ It skips itself on a machine with no usable OpenGL.
 - **Yaw will drift.** Phase 2's filter corrects pitch and roll against gravity,
   but yaw has no absolute reference without magnetometer calibration. Expect
   slow rotation; a recentre key is the practical fix.
-- **The DK1 display is not detected at all, and no software can change that.** To
-  the PC the DK1 is an ordinary external monitor, and a monitor comes up in a
-  fixed order: hotplug detect, then EDID, then a display device. Windows reports
-  no sink on this machine's only external output and has never enumerated the
-  panel, so the chain breaks at the first step — the hotplug signal is not
-  reaching the GPU. An EDID override cannot help, because an override attaches to
-  a detected monitor and there is no detection to attach it to. The remaining
-  causes are the cable, the socket, or the DK1's own video path. Diagnose with
-  `python tools\dk1_display.py --list`; full reasoning in
-  [docs/STATUS.md](docs/STATUS.md#open-problem-the-display-and-why-it-cannot-be-turned-on-in-software).
+- **The panel and the tracker cannot currently be had at the same time.** The DK1
+  display *does* work — but only while a legacy Oculus runtime is running, and
+  that runtime claims the tracker exclusively. Kill it and the tracker comes back
+  while the panel goes dark. The player needs both, so Phase 4 is stuck on this
+  deadlock rather than on anything physical: the socket, cable, control box and
+  panel are all proven good. The way out is to find what the runtime sends over
+  USB that we do not, and send it ourselves. Diagnose with `python
+  tools\dk1_display.py --list` **while the runtime is running**; full reasoning in
+  [docs/STATUS.md](docs/STATUS.md#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
+
+  > An earlier version of this README said the panel was never detected and that
+  > the fault was physical. That was measured with no runtime running and it was
+  > wrong. No cable, adapter or splitter needs buying.
 - **The tracker can drop off USB.** It vanished once mid-session, with both device
   nodes reporting `Present: False`, and reseating the USB cable and the DC adapter
   brought it straight back. Reseat before investigating. See

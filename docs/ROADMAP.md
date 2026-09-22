@@ -180,15 +180,17 @@ cheaper.
 
 Two separate problems, both unproven.
 
-### 4a. Getting a fullscreen window onto the DK1 — blocked, and not on EDID
+### 4a. Getting a fullscreen window onto the DK1 — blocked on a deadlock, not on EDID
 
-**This section anticipated the wrong problem.** It assumed the panel would be
-detected and that its unusual EDID might not offer 1280×800 @ 60 Hz. What actually
-happens is that Windows never detects the panel at all: the hotplug signal does not
-reach the GPU, so no EDID is ever read and no display device is ever created. There
-is no mode list to inspect and nothing for an EDID override to attach to. The full
-reasoning and the remaining physical causes are in
-[STATUS.md](STATUS.md#open-problem-the-display-and-why-it-cannot-be-turned-on-in-software).
+**This section anticipated the wrong problem, and so did its first correction.**
+It originally assumed the panel would be detected and that its unusual EDID might
+not offer 1280×800 @ 60 Hz. It was then rewritten to say Windows never detects the
+panel at all and that the fault is physical. Both are wrong.
+
+What actually happens: **the panel lights and renders, but only while a legacy
+Oculus runtime is running — and that runtime claims the tracker exclusively.** The
+player needs both at once and can have either. Full reasoning in
+[STATUS.md](STATUS.md#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
 
 The code side of 4a is nevertheless done. `tools/dk1_player.py` already takes
 `--fullscreen` and `--monitor N` and toggles fullscreen on `f`, so once a display
@@ -241,16 +243,15 @@ requires over/under stereo source footage.
 
 1. ~~Confirm Phase 1 on hardware (`--sanity`).~~ Done.
 2. ~~Measure the axis mapping.~~ Done — it is the identity.
-3. **Check the HDMI display works** — still outstanding, and still the thing that
-   can invalidate Phase 4. Investigated in depth; the panel is not detected at
-   all and the remaining causes are physical. See
-   [STATUS.md](STATUS.md#open-problem-the-display-and-why-it-cannot-be-turned-on-in-software).
+3. ~~Check the HDMI display works.~~ Done — **it works**, but only under a legacy
+   Oculus runtime, which locks the tracker. Breaking that deadlock is now the
+   open question, and it is a software one. See
+   [STATUS.md](STATUS.md#open-problem-the-display-needs-the-runtime-and-the-runtime-takes-the-tracker).
 4. ~~Phase 2 filter, verified against a recorded capture.~~ Done.
-5. ~~Phase 3 renderer in a normal desktop window first.~~ Done, and verified
-   against a replayed capture. **Not yet driven by the live filter** — the
-   tracker dropped off USB before that run, which is now the open hardware
-   question.
-6. Phase 4 fullscreen, then distortion, then stereo. Blocked on step 3.
+5. ~~Phase 3 renderer in a normal desktop window first.~~ Done, verified against a
+   replayed capture **and driven live off the headset** at 90 fps.
+6. **Phase 4b — distortion, then stereo — can start now.** It never needed the
+   display. 4a is code-complete and waits on step 3.
 
 Steps 5 and 6 are deliberately separated: debugging a renderer while wearing a
 headset with a warped image is miserable. Get it correct on a monitor first.
