@@ -337,8 +337,20 @@ Oculus runtime running, and it did not survive the first test in the other state
 ### What actually happens
 
 A legacy Oculus runtime was installed and started. **Windows detected the HDMI
-display, and a demo scene rendered on the headset** (observed 2026-09-21). Kill
-the runtime and the panel goes dark again, while the tracker becomes ours.
+display, and a demo scene rendered on the headset** (reported 2026-09-21).
+
+> ⚠️ **Not reproduced, 2026-09-22.** A later `--list` — run with the runtime
+> installed, and now also querying `QDC_INCLUDE_HMD` — reported the original
+> baseline exactly: two outputs, target 258 with no display attached, and
+> **nothing hidden in Direct Mode**. So the panel is not merely being concealed
+> from the desktop.
+>
+> The runtime-on observation therefore rests on a single recollection, and the
+> state it was taken in is uncertain. Treat everything in this section as
+> **unconfirmed** until someone reports the headset visibly lit *at the same
+> moment* as a probe run. Note the documented trap: the runtime prints
+> `[TrackingManager] HMD connected` on the strength of the USB tracker alone,
+> with no display involved.
 
 | | Runtime running | Runtime killed |
 |---|---|---|
