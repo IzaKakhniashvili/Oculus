@@ -31,6 +31,7 @@ user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 QDC_ALL_PATHS = 1
 QDC_ONLY_ACTIVE_PATHS = 2
+QDC_INCLUDE_HMD = 0x20
 DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME = 2
 DISPLAYCONFIG_PATH_ACTIVE = 0x1
 ERROR_SUCCESS = 0
@@ -231,12 +232,12 @@ def target_name(path) -> TARGET_DEVICE_NAME:
     return info
 
 
-def cmd_list() -> int:
-    paths = query_paths(QDC_ALL_PATHS)
+def collect_outputs(paths) -> dict:
+    """Collapse paths onto the connector each one drives.
 
-    # One video output can appear on several paths, once per desktop source it
-    # could be driven from. The target id is what actually identifies the
-    # connector, so collapse on that.
+    One video output appears once per desktop source it could be driven from, so
+    the target id is what actually identifies the connector.
+    """
     outputs = {}
     for path in paths:
         target = path.targetInfo.id
@@ -252,6 +253,29 @@ def cmd_list() -> int:
         if path.targetInfo.refreshRate.Denominator:
             entry["refresh"] = (path.targetInfo.refreshRate.Numerator
                                 / path.targetInfo.refreshRate.Denominator)
+    return outputs
+
+
+def cmd_list() -> int:
+    paths = query_paths(QDC_ALL_PATHS)
+    outputs = collect_outputs(paths)
+
+    # A headset driver can take its panel out of the desktop altogether -- Direct
+    # Mode. Such a display is invisible to an ordinary query however it is cabled,
+    # so ask a second time with QDC_INCLUDE_HMD and diff the two answers.
+    #
+    # Without this the probe reports "no display attached" for a panel that is lit
+    # and actively rendering, which is precisely the contradiction that sent an
+    # earlier session hunting for a cable fault that did not exist.
+    hidden = {}
+    try:
+        hmd_outputs = collect_outputs(query_paths(QDC_ALL_PATHS | QDC_INCLUDE_HMD))
+    except OSError:
+        hmd_outputs = {}          # older Windows rejects the flag; not fatal
+    for target, e in hmd_outputs.items():
+        seen = outputs.get(target)
+        if seen is None or (e["available"] and not seen["available"]):
+            hidden[target] = e
 
     print(f"{len(paths)} path(s) over {len(outputs)} video output(s)\n")
 
@@ -268,10 +292,34 @@ def cmd_list() -> int:
         if e["vendor"] == DK1_EDID_VENDOR:
             dk1 = e["name"]
 
+    if hidden:
+        print()
+        print("  *** Visible ONLY with QDC_INCLUDE_HMD -- taken out of the desktop")
+        print("      by a headset driver (Direct Mode): ***")
+        for target, e in sorted(hidden.items()):
+            print(f"      target {target}  {e['tech']:<22} "
+                  f"EDID vendor {e['vendor']}   {e['name']}")
+
+    hidden_dk1 = any(e["vendor"] == DK1_EDID_VENDOR for e in hidden.values())
+
     external = [e for e in outputs.values() if e["tech"] != "internal panel"]
     occupied = [e for e in external if e["available"]]
 
     print()
+    if hidden_dk1:
+        print(f"The DK1 panel EXISTS -- EDID vendor {DK1_EDID_VENDOR} -- but it has been")
+        print("claimed in Direct Mode and hidden from the Windows desktop. That is why")
+        print("an ordinary query says nothing is attached while the headset is lit.")
+        print()
+        print("No window can be placed on a display the desktop cannot see, so the fix")
+        print("is to release it rather than to hunt for a cable fault:")
+        print("  1. Uninstall the Oculus runtime, or disable its display driver in")
+        print("     Device Manager, then reboot.")
+        print("  2. Re-run this probe. The panel should reappear as an ordinary")
+        print("     extended monitor -- and with no runtime running, the tracker")
+        print("     stays ours, which breaks the deadlock in docs/STATUS.md.")
+        return 0
+
     if dk1:
         print(f"Found EDID vendor {DK1_EDID_VENDOR} -- that is the DK1 ({dk1}).")
         print("Next: python tools/dk1_display.py --modes   (look for 1280x800 @ 60 Hz)")
@@ -287,6 +335,10 @@ def cmd_list() -> int:
         return 1
 
     if not occupied:
+        if hmd_outputs and not hidden:
+            print("Checked with QDC_INCLUDE_HMD too -- nothing is hidden in Direct Mode,")
+            print("so the panel really is not enumerating. Read on.")
+            print()
         print(f"{len(external)} external output(s) exist, but Windows reports no display")
         print("attached to any of them. It is not seeing a sink on the cable, so this is")
         print("not an EDID or mode problem yet -- the link is not coming up at all.")
