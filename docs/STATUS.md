@@ -339,18 +339,34 @@ Oculus runtime running, and it did not survive the first test in the other state
 A legacy Oculus runtime was installed and started. **Windows detected the HDMI
 display, and a demo scene rendered on the headset** (reported 2026-09-21).
 
-> ⚠️ **Not reproduced, 2026-09-22.** A later `--list` — run with the runtime
-> installed, and now also querying `QDC_INCLUDE_HMD` — reported the original
-> baseline exactly: two outputs, target 258 with no display attached, and
-> **nothing hidden in Direct Mode**. So the panel is not merely being concealed
-> from the desktop.
+> **Confirmed 2026-09-22.** The full Oculus demo scene was seen rendering inside
+> the headset. The panel, the cable, the socket, the control box and its video
+> receiver are all proven good beyond any doubt. Nothing physical needs buying
+> or replacing.
 >
-> The runtime-on observation therefore rests on a single recollection, and the
-> state it was taken in is uncertain. Treat everything in this section as
-> **unconfirmed** until someone reports the headset visibly lit *at the same
-> moment* as a probe run. Note the documented trap: the runtime prints
-> `[TrackingManager] HMD connected` on the strength of the USB tracker alone,
-> with no display involved.
+> **And a probe run in that same state still reported nothing attached** — two
+> outputs, target 258 empty, and **nothing revealed by `QDC_INCLUDE_HMD`
+> either.** Pixels were reaching a panel Windows says does not exist.
+>
+> That narrows the mechanism sharply rather than deepening the mystery.
+> `QDC_INCLUDE_HMD` is a *Microsoft* mechanism, for headsets the OS itself knows
+> about. It does not reveal a display that the **GPU vendor's driver** has taken
+> out of the OS display list below that level — which is exactly how Oculus
+> Direct Mode worked in the 0.6–0.8 era: through NVAPI on NVIDIA, and AMD's own
+> direct-display path on AMD. **This laptop is AMD-only**, so that is the path to
+> suspect, and it also explains why `DirectDisplayConfig.exe` being NVIDIA-only
+> told us nothing.
+>
+> **Working theory:** the Oculus software has the DK1's EDID on a "this is an
+> HMD, hide it" list honoured by the AMD driver, which would explain why the
+> panel never appears as a desktop monitor in *any* runtime state — it is
+> excluded before the OS ever lists it. The exclusion is persistent, which is
+> why stopping the service does not bring it back.
+>
+> **The test: uninstall the Oculus software completely, reboot, hot-plug the
+> headset, re-probe.** If the panel returns as an ordinary extended monitor, the
+> deadlock breaks outright — we get the display *and* the tracker, which is the
+> whole game.
 
 | | Runtime running | Runtime killed |
 |---|---|---|
